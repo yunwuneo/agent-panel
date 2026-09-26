@@ -1,0 +1,44 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: agentpanel
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: agentpanel
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U agentpanel" --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://agentpanel:ci-only-password@localhost:5432/agentpanel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run generate
+      - run: git diff --exit-code -- packages/protocol/generated apps/apple/AgentPanel/Generated
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun test packages apps/daemon apps/relay apps/web/src
+      - run: bun run --filter @agentpanel/web build
+      - run: bun run --filter @agentpanel/daemon build:all
+  apple:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run generate && bun scripts/check-swift.ts
+      - run: xcodebuild -quiet -project apps/apple/AgentPanel.xcodeproj -scheme AgentPanelMac CODE_SIGNING_ALLOWED=NO build
+      - run: xcodebuild -quiet -project apps/apple/AgentPanel.xcodeproj -scheme AgentPanel -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build

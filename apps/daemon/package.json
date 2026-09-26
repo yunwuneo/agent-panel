@@ -1,0 +1,20 @@
+{
+  "name": "@agentpanel/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/cli.ts run",
+    "start": "bun src/cli.ts run",
+    "doctor": "bun src/cli.ts doctor",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build src/cli.ts --compile --outfile dist/agentpaneld",
+    "build:all": "bun scripts/build.ts"
+  },
+  "dependencies": {
+    "@agentpanel/protocol": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.83",
+    "zod": "^4.3.6"
+  }
+}

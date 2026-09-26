@@ -1,0 +1,9 @@
+.git
+.tools
+.local
+.env*
+node_modules
+**/node_modules
+**/dist
+apps/apple
+test-results

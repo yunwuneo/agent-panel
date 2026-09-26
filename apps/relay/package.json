@@ -1,0 +1,25 @@
+{
+  "name": "@agentpanel/relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "start": "bun src/index.ts",
+    "migrate": "bun src/migrate.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agentpanel/protocol": "workspace:*",
+    "@simplewebauthn/server": "^13.2.2",
+    "drizzle-orm": "^0.44.5",
+    "hono": "^4.9.8",
+    "jose": "^6.1.0",
+    "postgres": "^3.4.7",
+    "web-push": "^3.6.7",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/web-push": "^3.6.4"
+  }
+}
