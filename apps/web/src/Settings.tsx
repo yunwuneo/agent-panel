@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, errorText, post, type User } from "./api";
+import PricingSettings from "./PricingSettings";
 import { Notice, PageHeading, Spinner, Toggle } from "./ui";
 
 interface PushSettings {
@@ -252,6 +253,7 @@ export default function Settings({
             退出登录
           </button>
         </section>
+        <PricingSettings />
         <section className="settings-section surface notifications">
           <div className="settings-section-title">
             <Bell size={20} />

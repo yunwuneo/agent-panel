@@ -1,20 +1,60 @@
 // Generated from packages/protocol Zod schemas via protocol.schema.json. DO NOT EDIT.
 import Foundation
 
+public struct APQuotaWindow: Codable, Sendable {
+    public var id: String
+    public var label: String
+    public var usedPercent: Double
+    public var windowMinutes: Int?
+    public var resetsAt: Int?
+    public init(id: String, label: String, usedPercent: Double, windowMinutes: Int? = nil, resetsAt: Int? = nil) {
+        self.id = id
+        self.label = label
+        self.usedPercent = usedPercent
+        self.windowMinutes = windowMinutes
+        self.resetsAt = resetsAt
+    }
+}
+
+public struct APAgentQuota: Codable, Sendable {
+    public var status: String
+    public var source: String?
+    public var checkedAt: Int
+    public var updatedAt: Int?
+    public var staleAt: Int?
+    public var retryAt: Int?
+    public var message: String?
+    public var windows: [APQuotaWindow]
+    public init(status: String, source: String? = nil, checkedAt: Int, updatedAt: Int? = nil, staleAt: Int? = nil, retryAt: Int? = nil, message: String? = nil, windows: [APQuotaWindow]) {
+        self.status = status
+        self.source = source
+        self.checkedAt = checkedAt
+        self.updatedAt = updatedAt
+        self.staleAt = staleAt
+        self.retryAt = retryAt
+        self.message = message
+        self.windows = windows
+    }
+}
+
 public struct APAgentCapability: Codable, Sendable {
     public var kind: String
     public var installed: Bool
     public var version: String?
     public var authenticated: Bool?
+    public var executionAvailable: Bool?
     public var models: [String]?
     public var authMessage: String?
-    public init(kind: String, installed: Bool, version: String? = nil, authenticated: Bool? = nil, models: [String]? = nil, authMessage: String? = nil) {
+    public var quota: APAgentQuota?
+    public init(kind: String, installed: Bool, version: String? = nil, authenticated: Bool? = nil, executionAvailable: Bool? = nil, models: [String]? = nil, authMessage: String? = nil, quota: APAgentQuota? = nil) {
         self.kind = kind
         self.installed = installed
         self.version = version
         self.authenticated = authenticated
+        self.executionAvailable = executionAvailable
         self.models = models
         self.authMessage = authMessage
+        self.quota = quota
     }
 }
 
@@ -47,7 +87,8 @@ public struct APUsage: Codable, Sendable {
     public var pricingVersion: String?
     public var turns: Int?
     public var activeMs: Double?
-    public init(inputTokens: Double, outputTokens: Double, cacheReadTokens: Double, cacheWriteTokens: Double, costUsd: Double? = nil, model: String? = nil, pricingVersion: String? = nil, turns: Int? = nil, activeMs: Double? = nil) {
+    public var byModel: [APModelUsage]?
+    public init(inputTokens: Double, outputTokens: Double, cacheReadTokens: Double, cacheWriteTokens: Double, costUsd: Double? = nil, model: String? = nil, pricingVersion: String? = nil, turns: Int? = nil, activeMs: Double? = nil, byModel: [APModelUsage]? = nil) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.cacheReadTokens = cacheReadTokens
@@ -57,6 +98,37 @@ public struct APUsage: Codable, Sendable {
         self.pricingVersion = pricingVersion
         self.turns = turns
         self.activeMs = activeMs
+        self.byModel = byModel
+    }
+}
+
+public struct APModelUsage: Codable, Sendable {
+    public var inputTokens: Double
+    public var outputTokens: Double
+    public var cacheReadTokens: Double
+    public var cacheWriteTokens: Double
+    public var model: String?
+    public init(inputTokens: Double, outputTokens: Double, cacheReadTokens: Double, cacheWriteTokens: Double, model: String? = nil) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheWriteTokens = cacheWriteTokens
+        self.model = model
+    }
+}
+
+public struct APModelPrice: Codable, Sendable {
+    public var model: String
+    public var input: Double
+    public var output: Double
+    public var cacheRead: Double
+    public var cacheWrite: Double
+    public init(model: String, input: Double, output: Double, cacheRead: Double, cacheWrite: Double) {
+        self.model = model
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
     }
 }
 
@@ -82,9 +154,10 @@ public struct APSession: Codable, Sendable {
     public var updatedAt: Int
     public var readOnly: Bool
     public var busyReason: String?
+    public var excludedReason: String?
     public var usage: APUsage?
     public var usageByDay: [APUsageDay]?
-    public init(id: String, deviceId: String, agent: String, cwd: String, title: String, status: String, source: String, nativeId: String? = nil, createdAt: Int, updatedAt: Int, readOnly: Bool, busyReason: String? = nil, usage: APUsage? = nil, usageByDay: [APUsageDay]? = nil) {
+    public init(id: String, deviceId: String, agent: String, cwd: String, title: String, status: String, source: String, nativeId: String? = nil, createdAt: Int, updatedAt: Int, readOnly: Bool, busyReason: String? = nil, excludedReason: String? = nil, usage: APUsage? = nil, usageByDay: [APUsageDay]? = nil) {
         self.id = id
         self.deviceId = deviceId
         self.agent = agent
@@ -97,6 +170,7 @@ public struct APSession: Codable, Sendable {
         self.updatedAt = updatedAt
         self.readOnly = readOnly
         self.busyReason = busyReason
+        self.excludedReason = excludedReason
         self.usage = usage
         self.usageByDay = usageByDay
     }

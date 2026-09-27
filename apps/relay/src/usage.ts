@@ -1,5 +1,13 @@
-import { addUsage, emptyUsage, type Session, type Usage } from "@agentpanel/protocol";
+import {
+  addUsage,
+  combineModelUsage,
+  emptyUsage,
+  isQuotaProbe,
+  type Session,
+  type Usage,
+} from "@agentpanel/protocol";
 import { ApiError, digest } from "./auth";
+import { effectivePrices, PRICE_VERSION, priceUsage } from "./pricing";
 import type { RecordData, Store } from "./store";
 
 type UsageObservation = { ts: number; usage: Usage };
@@ -11,6 +19,8 @@ type UsageRow = RecordData & {
   nativeId?: string;
   agent: string;
   project: string;
+  source?: string;
+  excludedReason?: string;
   usage: Usage;
   updatedAt: number;
 };
@@ -42,6 +52,14 @@ export function mergeUsage(a: Usage | undefined, b: Usage): Usage {
     if (key === "costUsd" && a?.[key] === undefined && b[key] === undefined) continue;
     merged[key] = Math.max(a?.[key] ?? 0, b[key] ?? 0);
   }
+  if (a?.byModel && b.byModel) {
+    const tokens = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const;
+    merged.byModel = tokens.every((key) => b[key] >= a[key])
+      ? b.byModel
+      : tokens.every((key) => a[key] >= b[key])
+        ? a.byModel
+        : combineModelUsage(a.byModel, b.byModel, "max");
+  }
   return merged;
 }
 function difference(a: Usage, b: Usage): Usage {
@@ -49,6 +67,11 @@ function difference(a: Usage, b: Usage): Usage {
   for (const key of counters) {
     if (key === "costUsd" && a[key] === undefined) continue;
     result[key] = Math.max(0, (a[key] ?? 0) - (b[key] ?? 0));
+  }
+  if (a.byModel && b.byModel) result.byModel = combineModelUsage(a.byModel, b.byModel, "subtract");
+  else if (a.byModel && b.inputTokens + b.outputTokens > 0) {
+    delete result.byModel;
+    delete result.model;
   }
   return result;
 }
@@ -92,6 +115,8 @@ export async function recordUsage(tx: Store, owner: string, session: Session, li
     nativeId: session.nativeId,
     agent: session.agent,
     project: session.cwd,
+    source: session.source,
+    excludedReason: session.excludedReason,
     updatedAt: Date.now(),
   };
   const days = new Map<string, DayRow>();
@@ -229,6 +254,8 @@ export async function queryStats(
       });
   const rows = daily.filter(
     (row) =>
+      !row.excludedReason &&
+      !isQuotaProbe({ agent: row.agent, cwd: row.project, source: row.source }) &&
       (!filter.deviceId || row.deviceId === filter.deviceId) &&
       (!filter.agent || row.agent === filter.agent) &&
       (!filter.project || row.project === filter.project) &&
@@ -245,6 +272,8 @@ export async function queryStats(
   >();
   const legacy = new Set<string>();
   let actualUsage = false;
+  const { prices, overrides } = await effectivePrices(tx, owner);
+  const missingModels = new Set<string>();
   for (const row of rows) {
     if (nonzero(row.legacyUsage)) legacy.add(row.sessionKey);
     if (nonzero(difference(row.usage, row.legacyUsage ?? emptyUsage()))) actualUsage = true;
@@ -266,11 +295,12 @@ export async function queryStats(
       project: row.project,
     };
     dimensions.set(scopeKey, dimension);
+    const estimate = priceUsage(row.usage, prices);
+    for (const model of estimate.missingModels) missingModels.add(model);
     for (const target of [total, bucket, dimension]) {
-      target.usage = addUsage(target.usage, row.usage);
+      target.usage = addUsage(target.usage, estimate.usage);
       target.sessionKeys.add(row.sessionKey);
-      if (row.usage.costUsd === undefined && row.usage.inputTokens + row.usage.outputTokens > 0)
-        target.unpriced.add(row.sessionKey);
+      if (estimate.missingModels.length > 0) target.unpriced.add(row.sessionKey);
     }
   }
   const totals = (value: Group) => ({
@@ -285,7 +315,7 @@ export async function queryStats(
   const versions = [...new Set(rows.map((row) => row.usage.pricingVersion).filter(Boolean))];
   return {
     sessions: total.sessionKeys.size,
-    usage: total.usage,
+    usage: totals(total),
     buckets: [...buckets]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, value]) => ({ key, sessions: value.sessionKeys.size, usage: value.usage })),
@@ -297,7 +327,10 @@ export async function queryStats(
       totals: totals(value),
     })),
     unpricedSessions: total.unpriced.size,
-    priceVersion: versions.join(", ") || "source-reported-estimate",
+    missingModels: [...missingModels].sort(),
+    priceVersion: [
+      ...new Set([PRICE_VERSION, ...(overrides.length ? ["custom"] : []), ...versions]),
+    ].join(", "),
     timeBasis: legacy.size ? (actualUsage ? "mixed" : "session-created-at") : "usage-day",
     legacySessionCount: legacy.size,
   };

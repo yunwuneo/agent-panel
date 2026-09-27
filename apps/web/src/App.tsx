@@ -396,7 +396,16 @@ export default function App() {
                 onNotify={setToast}
               />
             ) : view === "stats" ? (
-              <Stats devices={deviceList} sessions={sessionList} />
+              <Stats
+                devices={deviceList}
+                sessions={sessionList}
+                onPricing={() => {
+                  setView("settings");
+                  requestAnimationFrame(() =>
+                    document.getElementById("model-pricing")?.scrollIntoView({ block: "start" }),
+                  );
+                }}
+              />
             ) : (
               <Settings
                 user={user}

@@ -19,13 +19,35 @@ export const PermissionModeSchema = z.enum(["default", "acceptEdits", "plan"]);
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export const ErrorSchema = z.object({ code: z.string(), message: z.string() });
 export type ApiError = z.infer<typeof ErrorSchema>;
+export const QuotaWindowSchema = z.object({
+  id: z.string().min(1).max(80),
+  label: z.string().min(1).max(100),
+  usedPercent: z.number().min(0).max(100),
+  windowMinutes: z.number().int().positive().optional(),
+  resetsAt: Timestamp.optional(),
+});
+export type QuotaWindow = z.infer<typeof QuotaWindowSchema>;
+export const AgentQuotaSchema = z.object({
+  status: z.enum(["loading", "available", "stale", "unavailable", "error"]),
+  source: z.string().max(80).optional(),
+  checkedAt: Timestamp,
+  updatedAt: Timestamp.optional(),
+  staleAt: Timestamp.optional(),
+  retryAt: Timestamp.optional(),
+  message: z.string().max(500).optional(),
+  windows: z.array(QuotaWindowSchema).max(16),
+});
+export type AgentQuota = z.infer<typeof AgentQuotaSchema>;
 export const AgentCapabilitySchema = z.object({
   kind: AgentKindSchema,
   installed: z.boolean(),
   version: z.string().optional(),
+  // Legacy execution readiness; this does not describe subscription authentication.
   authenticated: z.boolean().optional(),
+  executionAvailable: z.boolean().optional(),
   models: z.array(z.string()).optional(),
   authMessage: z.string().optional(),
+  quota: AgentQuotaSchema.optional(),
 });
 export type AgentCapability = z.infer<typeof AgentCapabilitySchema>;
 export const DeviceSchema = z.object({
@@ -38,17 +60,22 @@ export const DeviceSchema = z.object({
   lastSeen: Timestamp,
 });
 export type Device = z.infer<typeof DeviceSchema>;
-export const UsageSchema = z.object({
+export const TokenCountsSchema = z.object({
   // All input tokens, including the separately reported cached reads/writes.
   inputTokens: z.number().nonnegative(),
   outputTokens: z.number().nonnegative(),
   cacheReadTokens: z.number().nonnegative(),
   cacheWriteTokens: z.number().nonnegative(),
+});
+export const ModelUsageSchema = TokenCountsSchema.extend({ model: z.string().optional() });
+export type ModelUsage = z.infer<typeof ModelUsageSchema>;
+export const UsageSchema = TokenCountsSchema.extend({
   costUsd: z.number().nonnegative().optional(),
   model: z.string().optional(),
   pricingVersion: z.string().optional(),
   turns: z.number().int().nonnegative().optional(),
   activeMs: z.number().nonnegative().optional(),
+  byModel: z.array(ModelUsageSchema).optional(),
 });
 export type Usage = z.infer<typeof UsageSchema>;
 export const UsageDaySchema = z.object({
@@ -77,10 +104,29 @@ export const SessionSchema = z.object({
   updatedAt: Timestamp,
   readOnly: z.boolean(),
   busyReason: z.string().optional(),
+  excludedReason: z.literal("quota-probe").optional(),
   usage: UsageSchema.optional(),
   usageByDay: z.array(UsageDaySchema).optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
+export function isQuotaProbe(session: { agent: string; cwd: string; source?: string }) {
+  return (
+    session.agent === "claude" &&
+    session.source !== "managed" &&
+    session.cwd
+      .replaceAll("\\", "/")
+      .replace(/\/+$/, "")
+      .endsWith("/Library/Application Support/CodexBar/ClaudeProbe")
+  );
+}
+export const ModelPriceSchema = z.object({
+  model: z.string().trim().min(1).max(128),
+  input: z.number().finite().min(0).max(1_000_000),
+  output: z.number().finite().min(0).max(1_000_000),
+  cacheRead: z.number().finite().min(0).max(1_000_000),
+  cacheWrite: z.number().finite().min(0).max(1_000_000),
+});
+export type ModelPrice = z.infer<typeof ModelPriceSchema>;
 export const SessionEventSchema = z.object({
   kind: z.enum([
     "message.delta",
@@ -167,6 +213,7 @@ export const payloadSchemas = {
     version: z.string().optional(),
   }),
   "device.status": DeviceSchema,
+  "device.refresh": z.object({}),
   "session.create": z.object({
     agent: AgentKindSchema,
     cwd: z.string().min(1),
@@ -264,6 +311,7 @@ export function parseEnvelope(value: unknown): Envelope {
   return parsed;
 }
 export const COMMAND_TYPES = [
+  "device.refresh",
   "session.create",
   "session.resume",
   "session.send",
@@ -291,7 +339,58 @@ export function addUsage(a: Usage, b: Usage): Usage {
       : {}),
     turns: (a.turns ?? 0) + (b.turns ?? 0),
     activeMs: (a.activeMs ?? 0) + (b.activeMs ?? 0),
+    ...(a.byModel || b.byModel
+      ? { byModel: combineModelUsage(modelParts(a), modelParts(b), "add") }
+      : {}),
   };
+}
+
+export function modelParts(usage: Usage): ModelUsage[] {
+  if (usage.byModel) return usage.byModel;
+  if (
+    !usage.inputTokens &&
+    !usage.outputTokens &&
+    !usage.cacheReadTokens &&
+    !usage.cacheWriteTokens
+  )
+    return [];
+  return [
+    {
+      model: usage.model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+    },
+  ];
+}
+export function combineModelUsage(
+  a: ModelUsage[],
+  b: ModelUsage[],
+  operation: "add" | "max" | "subtract",
+): ModelUsage[] {
+  const result = new Map<string, ModelUsage>();
+  for (const part of a) result.set(part.model ?? "", { ...part });
+  for (const part of b) {
+    const key = part.model ?? "";
+    const previous = result.get(key) ?? { ...emptyUsage(), model: part.model };
+    for (const field of [
+      "inputTokens",
+      "outputTokens",
+      "cacheReadTokens",
+      "cacheWriteTokens",
+    ] as const)
+      previous[field] =
+        operation === "add"
+          ? previous[field] + part[field]
+          : operation === "max"
+            ? Math.max(previous[field], part[field])
+            : Math.max(0, previous[field] - part[field]);
+    result.set(key, previous);
+  }
+  return [...result.values()].filter(
+    (p) => p.inputTokens || p.outputTokens || p.cacheReadTokens || p.cacheWriteTokens,
+  );
 }
 
 // Named schemas form the deterministic Swift model generation input. Transport
@@ -302,9 +401,13 @@ export const SwiftEnvelopeSchema = z.object({
   payload: JsonSchema,
 });
 export const namedSchemas = {
+  APQuotaWindow: QuotaWindowSchema,
+  APAgentQuota: AgentQuotaSchema,
   APAgentCapability: AgentCapabilitySchema,
   APDevice: DeviceSchema,
   APUsage: UsageSchema,
+  APModelUsage: ModelUsageSchema,
+  APModelPrice: ModelPriceSchema,
   APUsageDay: UsageDaySchema,
   APSession: SessionSchema,
   APError: ErrorSchema,

@@ -77,6 +77,45 @@ test("actual HTTP/WebSocket transport routes subscribed events and closes revoke
     expect((await fetch(`${base}/ws?ticket=${ticket.ticket}`)).status).toBe(401);
     daemon = socket(`${wsBase}/ws`, { Authorization: `Bearer ${device.deviceToken}` });
     await daemon.opened;
+    const hello = makeEnvelope(
+      "device.hello",
+      {
+        name: "Transport",
+        platform: "linux",
+        version: "0.1.0",
+        agents: [
+          {
+            kind: "claude",
+            installed: true,
+            executionAvailable: false,
+            quota: {
+              status: "available",
+              checkedAt: Date.now(),
+              windows: [
+                {
+                  id: "five_hour",
+                  label: "5 小时",
+                  usedPercent: 12,
+                  resetsAt: Date.now() + 300000,
+                },
+              ],
+            },
+          },
+        ],
+      },
+      { deviceId: device.deviceId },
+    );
+    daemon.ws.send(JSON.stringify(hello));
+    const updated = await browser.until(
+      (e) => e.type === "device.status" && e.payload.agents[0]?.quota?.status === "available",
+    );
+    if (updated.type !== "device.status") throw new Error("Missing status");
+    expect(updated.payload.agents[0]?.executionAvailable).toBe(false);
+    expect(updated.payload.agents[0]?.quota?.windows[0]?.usedPercent).toBe(12);
+    const refresh = makeEnvelope("device.refresh", {}, { deviceId: device.deviceId });
+    await expect(relay.hub.command("foreign-owner", refresh)).rejects.toThrow();
+    expect((await request("/api/commands", refresh)).status).toBe(200);
+    expect((await daemon.until((e) => e.id === refresh.id)).type).toBe("device.refresh");
     const create = makeEnvelope(
       "session.create",
       { agent: "codex", cwd: "/tmp", prompt: "transport" },

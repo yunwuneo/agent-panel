@@ -42,13 +42,13 @@ struct NewSessionView: View {
             .navigationTitle("新的会话")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("开始") { create() }.disabled(device.isEmpty || cwd.isEmpty || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading || capability?.installed == false || capability?.authenticated == false) }
+                ToolbarItem(placement: .confirmationAction) { Button("开始") { create() }.disabled(device.isEmpty || cwd.isEmpty || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading || capability?.installed == false || (capability?.executionAvailable ?? capability?.authenticated) == false) }
             }
         }.frame(minWidth: 340, idealWidth: 560, minHeight: 520)
         .onAppear { device = model.devices.first { $0.id == model.selectedDevice && $0.online }?.id ?? model.devices.first(where: \.online)?.id ?? "" }
         .onChange(of: device) { _, _ in
             entries = nil; cwd = ""; agentModel = ""
-            let available = model.devices.first { $0.id == device }?.agents.first { $0.installed && $0.authenticated == true }
+            let available = model.devices.first { $0.id == device }?.agents.first { $0.installed && ($0.executionAvailable ?? $0.authenticated) == true }
             agent = available?.kind ?? "codex"
             browse(nil)
         }
@@ -93,13 +93,13 @@ struct PairingView: View {
             VStack(spacing: 24) {
                 Image(systemName: "display.2").font(.system(size: 40, weight: .light)).foregroundStyle(.blue)
                 Text("连接你的设备").font(.title2.bold())
-                Text("在需要控制的设备上输入配对码。\n一次配对，随时继续工作。").multilineTextAlignment(.center).foregroundStyle(.secondary)
+                Text("在需要控制的设备上依次运行以下命令。\n配对后启动 Daemon，保持终端开启，设备才会上线。").multilineTextAlignment(.center).foregroundStyle(.secondary)
                 if model.pairingCode.isEmpty { ProgressView() }
                 else {
                     if let qr = qrCode { Image(decorative: qr, scale: 1).interpolation(.none).resizable().frame(width: 155, height: 155).padding(15).background(.white, in: RoundedRectangle(cornerRadius: 16)) }
                     Text(model.pairingCode).font(.system(size: 30, weight: .medium, design: .monospaced)).textSelection(.enabled)
                     if let expires = model.pairingExpiresAt { TimelineView(.periodic(from: .now, by: 1)) { context in let remaining = max(0, Int(expires / 1000 - context.date.timeIntervalSince1970)); Text(remaining > 0 ? "\(remaining / 60):\(String(format: "%02d", remaining % 60)) 后失效" : "配对码已失效").font(.caption).foregroundStyle(.secondary) } }
-                    Text("agentpaneld pair --relay \(model.relayURL) --code \(model.pairingCode)").font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding().background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                    Text("agentpaneld pair --relay \(model.relayURL) --code \(model.pairingCode)\nagentpaneld run").font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding().background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
                     Button("生成新的配对码") { Task { await model.pair() } }
                 }
             }.padding(30).frame(maxWidth: 460)
@@ -151,7 +151,8 @@ struct StatsView: View {
                             BarMark(x: .value("日期", bucket["key"].stringValue ?? ""), y: .value("Token", (bucket["usage"]["inputTokens"].numberValue ?? 0) + (bucket["usage"]["outputTokens"].numberValue ?? 0))).foregroundStyle(.blue.gradient).cornerRadius(4)
                         }.frame(height: 220).padding(20).panelGlass()
                     } else { ContentUnavailableView("暂时没有用量", systemImage: "chart.bar", description: Text("运行会话或导入本地历史后，统计会显示在这里。")) }
-                    Text("费用由模型价格表估算，实际账单以服务商为准。未知价格不会计为零费用。").font(.caption).foregroundStyle(.secondary)
+                    NavigationLink("设置模型单价") { ModelPricingView(model: model, onSaved: refresh) }
+                    Text("费用使用当前模型单价估算；来源已报告的费用优先保留。未知价格不会计为零费用，不代表订阅账单。").font(.caption).foregroundStyle(.secondary)
                     if let count = model.stats["unpricedSessions"].numberValue, count > 0 { Text("有 \(Int(count)) 个会话缺少价格，当前金额仅包含已知费用。").font(.caption).foregroundStyle(.orange) }
                 }.padding(28)
             }.background { PanelBackdrop() }
@@ -182,6 +183,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("连接") { LabeledContent("Relay", value: model.relayURL); LabeledContent("账号", value: model.email) }
+                Section("费用") { NavigationLink("模型单价 · USD / 百万 Token") { ModelPricingView(model: model) } }
                 Section("通知偏好") {
                     Picker("设备范围", selection: $scopeDevice) { Text("全部设备").tag(""); ForEach(model.devices, id: \.id) { Text($0.name).tag($0.id) } }
                     Picker("会话范围", selection: $scopeSession) { Text("全部会话").tag(""); ForEach(model.sessions.filter { scopeDevice.isEmpty || $0.deviceId == scopeDevice }, id: \.id) { Text($0.title).tag($0.id) } }
@@ -220,5 +222,93 @@ struct SettingsView: View {
             if !scopeDevice.isEmpty { values["deviceId"] = .string(scopeDevice) }; if !scopeSession.isEmpty { values["sessionId"] = .string(scopeSession) }
             _ = try await model.api.request("/api/push/settings", method: "PUT", body: .object(values))
         } }
+    }
+}
+
+struct ModelPricingView: View {
+    @Bindable var model: AppModel
+    var onSaved: () -> Void = {}
+    @State private var catalog: [JSONValue] = []
+    @State private var note = ""
+    @State private var selected = ""
+    @State private var customModel = ""
+    @State private var rates = ["", "", "", ""]
+    @State private var loading = true
+    @State private var saving = false
+    @State private var failure: String?
+    @State private var message = ""
+    private let fields = [("input", "非缓存输入"), ("output", "输出"), ("cacheRead", "缓存读取"), ("cacheWrite", "缓存写入")]
+    var modelName: String { (selected == "__custom__" ? customModel : selected).trimmingCharacters(in: .whitespacesAndNewlines) }
+    var entry: JSONValue { catalog.first { $0["model"].stringValue == modelName } ?? .null }
+    var body: some View {
+        Form {
+            Section {
+                if loading { ProgressView("正在加载单价") }
+                else {
+                    Picker("模型", selection: $selected) {
+                        ForEach(catalog.indices, id: \.self) { index in
+                            let item = catalog[index]
+                            let name = item["model"].stringValue ?? ""
+                            Text(name + (item["source"].stringValue == "unknown" ? " · 未设置" : "")).tag(name)
+                        }
+                        Text("添加其他模型…").tag("__custom__")
+                    }
+                    if selected == "__custom__" { TextField("准确模型名称", text: $customModel) }
+                    if entry["source"].stringValue == "custom" { Text("自定义单价").foregroundStyle(.secondary) }
+                    else if let source = entry["sourceUrl"].stringValue, let url = URL(string: source) { Link("官方参考价 · \(entry["checkedAt"].stringValue ?? "")", destination: url) }
+                    else { Text("价格未知，可保持未设置。").foregroundStyle(.secondary) }
+                }
+            }
+            if !loading {
+                Section("USD / 百万 Token") {
+                    ForEach(fields.indices, id: \.self) { index in
+                        HStack {
+                            Text(fields[index].1)
+                            TextField("未设置", text: $rates[index]).multilineTextAlignment(.trailing)
+                        }
+                    }
+                    Button(saving ? "正在保存…" : "保存模型单价") { Task { await save(reset: false) } }.disabled(saving || modelName.isEmpty)
+                    Button("恢复默认") { Task { await save(reset: true) } }.disabled(saving || entry["source"].stringValue != "custom")
+                    Text("保存后重新估算历史用量；免费项目请明确填 0。").font(.caption).foregroundStyle(.secondary)
+                }.disabled(saving)
+            }
+            if let failure { Section { Text(failure).foregroundStyle(.red); Button("重新加载") { Task { await load() } } } }
+            if !message.isEmpty { Section { Text(message).foregroundStyle(.secondary) } }
+            if !note.isEmpty { Section { Text(note).font(.caption).foregroundStyle(.secondary) } }
+        }
+        .formStyle(.grouped).navigationTitle("模型费用")
+        .task { await load() }
+        .onChange(of: selected) { _, _ in fillRates(); message = "" }
+        .onChange(of: customModel) { _, _ in fillRates(); message = "" }
+    }
+    func fillRates() { rates = fields.map { entry["price"][$0.0].numberValue.map { String($0) } ?? "" } }
+    func load() async {
+        loading = true; failure = nil
+        defer { loading = false }
+        do {
+            let response = try await model.api.request("/api/pricing")
+            catalog = response["models"].arrayValue ?? []; note = response["note"].stringValue ?? ""
+            if selected.isEmpty { selected = catalog.first(where: { $0["observed"].boolValue == true })?["model"].stringValue ?? catalog.first?["model"].stringValue ?? "__custom__" }
+            fillRates()
+        } catch { failure = error.localizedDescription }
+    }
+    func save(reset: Bool) async {
+        saving = true; failure = nil; message = ""
+        defer { saving = false }
+        do {
+            if reset {
+                var query = URLComponents(); query.queryItems = [URLQueryItem(name: "model", value: modelName)]
+                _ = try await model.api.request("/api/pricing?\(query.percentEncodedQuery ?? "")", method: "DELETE")
+            } else {
+                guard !modelName.isEmpty, modelName.count <= 128 else { failure = "请输入有效模型名称。"; return }
+                var values: [String: JSONValue] = ["model": .string(modelName)]
+                for index in fields.indices {
+                    guard let value = Double(rates[index].trimmingCharacters(in: .whitespacesAndNewlines)), value.isFinite, value >= 0, value <= 1_000_000 else { failure = "请填写四项有效单价（0 至 1,000,000）；未知价格可保持未设置。"; return }
+                    values[fields[index].0] = .number(value)
+                }
+                _ = try await model.api.request("/api/pricing", method: "PUT", body: .object(values))
+            }
+            await load(); onSaved(); message = "已保存，历史估算已更新。"
+        } catch { failure = error.localizedDescription }
     }
 }

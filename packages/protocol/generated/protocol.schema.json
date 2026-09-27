@@ -72,6 +72,9 @@
                     "authenticated": {
                       "type": "boolean"
                     },
+                    "executionAvailable": {
+                      "type": "boolean"
+                    },
                     "models": {
                       "type": "array",
                       "items": {
@@ -80,6 +83,95 @@
                     },
                     "authMessage": {
                       "type": "string"
+                    },
+                    "quota": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "loading",
+                            "available",
+                            "stale",
+                            "unavailable",
+                            "error"
+                          ]
+                        },
+                        "source": {
+                          "type": "string",
+                          "maxLength": 80
+                        },
+                        "checkedAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "updatedAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "staleAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "retryAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "message": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "windows": {
+                          "maxItems": 16,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "usedPercent": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 100
+                              },
+                              "windowMinutes": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "resetsAt": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "usedPercent"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "checkedAt",
+                        "windows"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -189,6 +281,9 @@
                     "authenticated": {
                       "type": "boolean"
                     },
+                    "executionAvailable": {
+                      "type": "boolean"
+                    },
                     "models": {
                       "type": "array",
                       "items": {
@@ -197,6 +292,95 @@
                     },
                     "authMessage": {
                       "type": "string"
+                    },
+                    "quota": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "loading",
+                            "available",
+                            "stale",
+                            "unavailable",
+                            "error"
+                          ]
+                        },
+                        "source": {
+                          "type": "string",
+                          "maxLength": 80
+                        },
+                        "checkedAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "updatedAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "staleAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "retryAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "message": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "windows": {
+                          "maxItems": 16,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "usedPercent": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 100
+                              },
+                              "windowMinutes": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "resetsAt": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "usedPercent"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "checkedAt",
+                        "windows"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -220,6 +404,57 @@
               "agents",
               "lastSeen"
             ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "v",
+          "id",
+          "ts",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "v": {
+            "type": "number",
+            "const": 1
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "deviceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ts": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "type": {
+            "type": "string",
+            "const": "device.refresh"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {},
             "additionalProperties": false
           }
         },
@@ -717,6 +952,10 @@
                     "busyReason": {
                       "type": "string"
                     },
+                    "excludedReason": {
+                      "type": "string",
+                      "const": "quota-probe"
+                    },
                     "usage": {
                       "type": "object",
                       "properties": {
@@ -754,6 +993,40 @@
                         "activeMs": {
                           "type": "number",
                           "minimum": 0
+                        },
+                        "byModel": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "inputTokens": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "outputTokens": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "cacheReadTokens": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "cacheWriteTokens": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "model": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "inputTokens",
+                              "outputTokens",
+                              "cacheReadTokens",
+                              "cacheWriteTokens"
+                            ],
+                            "additionalProperties": false
+                          }
                         }
                       },
                       "required": [
@@ -810,6 +1083,40 @@
                               "activeMs": {
                                 "type": "number",
                                 "minimum": 0
+                              },
+                              "byModel": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "inputTokens": {
+                                      "type": "number",
+                                      "minimum": 0
+                                    },
+                                    "outputTokens": {
+                                      "type": "number",
+                                      "minimum": 0
+                                    },
+                                    "cacheReadTokens": {
+                                      "type": "number",
+                                      "minimum": 0
+                                    },
+                                    "cacheWriteTokens": {
+                                      "type": "number",
+                                      "minimum": 0
+                                    },
+                                    "model": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "inputTokens",
+                                    "outputTokens",
+                                    "cacheReadTokens",
+                                    "cacheWriteTokens"
+                                  ],
+                                  "additionalProperties": false
+                                }
                               }
                             },
                             "required": [
@@ -983,6 +1290,40 @@
                   "activeMs": {
                     "type": "number",
                     "minimum": 0
+                  },
+                  "byModel": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "inputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "outputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cacheReadTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cacheWriteTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "model": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "inputTokens",
+                        "outputTokens",
+                        "cacheReadTokens",
+                        "cacheWriteTokens"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": [
@@ -1441,6 +1782,40 @@
                   "activeMs": {
                     "type": "number",
                     "minimum": 0
+                  },
+                  "byModel": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "inputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "outputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cacheReadTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cacheWriteTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "model": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "inputTokens",
+                        "outputTokens",
+                        "cacheReadTokens",
+                        "cacheWriteTokens"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": [
@@ -1499,6 +1874,40 @@
                         "activeMs": {
                           "type": "number",
                           "minimum": 0
+                        },
+                        "byModel": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "inputTokens": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "outputTokens": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "cacheReadTokens": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "cacheWriteTokens": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "model": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "inputTokens",
+                              "outputTokens",
+                              "cacheReadTokens",
+                              "cacheWriteTokens"
+                            ],
+                            "additionalProperties": false
+                          }
                         }
                       },
                       "required": [
@@ -1890,6 +2299,133 @@
     }
   },
   "models": {
+    "APQuotaWindow": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "usedPercent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "windowMinutes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "resetsAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "usedPercent"
+      ],
+      "additionalProperties": false
+    },
+    "APAgentQuota": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "loading",
+            "available",
+            "stale",
+            "unavailable",
+            "error"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "checkedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "updatedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "staleAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retryAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "windows": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "usedPercent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "windowMinutes": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "resetsAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "usedPercent"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "status",
+        "checkedAt",
+        "windows"
+      ],
+      "additionalProperties": false
+    },
     "APAgentCapability": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -1910,6 +2446,9 @@
         "authenticated": {
           "type": "boolean"
         },
+        "executionAvailable": {
+          "type": "boolean"
+        },
         "models": {
           "type": "array",
           "items": {
@@ -1918,6 +2457,95 @@
         },
         "authMessage": {
           "type": "string"
+        },
+        "quota": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "loading",
+                "available",
+                "stale",
+                "unavailable",
+                "error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "checkedAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "updatedAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "staleAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "retryAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "windows": {
+              "maxItems": 16,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "usedPercent": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "windowMinutes": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "resetsAt": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "usedPercent"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "status",
+            "checkedAt",
+            "windows"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -1970,6 +2598,9 @@
               "authenticated": {
                 "type": "boolean"
               },
+              "executionAvailable": {
+                "type": "boolean"
+              },
               "models": {
                 "type": "array",
                 "items": {
@@ -1978,6 +2609,95 @@
               },
               "authMessage": {
                 "type": "string"
+              },
+              "quota": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "loading",
+                      "available",
+                      "stale",
+                      "unavailable",
+                      "error"
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "checkedAt": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "updatedAt": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "staleAt": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "retryAt": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "message": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "windows": {
+                    "maxItems": 16,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        },
+                        "usedPercent": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        "windowMinutes": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "resetsAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label",
+                        "usedPercent"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "status",
+                  "checkedAt",
+                  "windows"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -2041,6 +2761,40 @@
         "activeMs": {
           "type": "number",
           "minimum": 0
+        },
+        "byModel": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "inputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cacheReadTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cacheWriteTokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "model": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "inputTokens",
+              "outputTokens",
+              "cacheReadTokens",
+              "cacheWriteTokens"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
@@ -2048,6 +2802,77 @@
         "outputTokens",
         "cacheReadTokens",
         "cacheWriteTokens"
+      ],
+      "additionalProperties": false
+    },
+    "APModelUsage": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "inputTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cacheReadTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cacheWriteTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "inputTokens",
+        "outputTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens"
+      ],
+      "additionalProperties": false
+    },
+    "APModelPrice": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "input": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "output": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "cacheRead": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "cacheWrite": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "model",
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite"
       ],
       "additionalProperties": false
     },
@@ -2096,6 +2921,40 @@
             "activeMs": {
               "type": "number",
               "minimum": 0
+            },
+            "byModel": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "inputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "outputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheReadTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheWriteTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inputTokens",
+                  "outputTokens",
+                  "cacheReadTokens",
+                  "cacheWriteTokens"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -2177,6 +3036,10 @@
         "busyReason": {
           "type": "string"
         },
+        "excludedReason": {
+          "type": "string",
+          "const": "quota-probe"
+        },
         "usage": {
           "type": "object",
           "properties": {
@@ -2214,6 +3077,40 @@
             "activeMs": {
               "type": "number",
               "minimum": 0
+            },
+            "byModel": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "inputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "outputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheReadTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheWriteTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inputTokens",
+                  "outputTokens",
+                  "cacheReadTokens",
+                  "cacheWriteTokens"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -2270,6 +3167,40 @@
                   "activeMs": {
                     "type": "number",
                     "minimum": 0
+                  },
+                  "byModel": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "inputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "outputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cacheReadTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cacheWriteTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "model": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "inputTokens",
+                        "outputTokens",
+                        "cacheReadTokens",
+                        "cacheWriteTokens"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": [
@@ -2408,6 +3339,40 @@
             "activeMs": {
               "type": "number",
               "minimum": 0
+            },
+            "byModel": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "inputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "outputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheReadTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheWriteTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inputTokens",
+                  "outputTokens",
+                  "cacheReadTokens",
+                  "cacheWriteTokens"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -2778,6 +3743,40 @@
             "activeMs": {
               "type": "number",
               "minimum": 0
+            },
+            "byModel": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "inputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "outputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheReadTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheWriteTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inputTokens",
+                  "outputTokens",
+                  "cacheReadTokens",
+                  "cacheWriteTokens"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -2840,6 +3839,40 @@
             "activeMs": {
               "type": "number",
               "minimum": 0
+            },
+            "byModel": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "inputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "outputTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheReadTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheWriteTokens": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inputTokens",
+                  "outputTokens",
+                  "cacheReadTokens",
+                  "cacheWriteTokens"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -2898,6 +3931,40 @@
                   "activeMs": {
                     "type": "number",
                     "minimum": 0
+                  },
+                  "byModel": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "inputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "outputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cacheReadTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cacheWriteTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "model": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "inputTokens",
+                        "outputTokens",
+                        "cacheReadTokens",
+                        "cacheWriteTokens"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": [

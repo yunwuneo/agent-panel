@@ -76,7 +76,9 @@ Daemon 上报**每个 native 会话的累计用量**，并在已索引的会话�
 
 `from` / `to` 按 UTC 日与查询范围的交集筛选，日粒度不等同于逐小时账单。`timeBasis=usage-day` 表示真实日期聚合；旧版没有 `usageByDay` 的累计快照暂按创建日期保留并明确返回 `session-created-at`，混合数据返回 `mixed`，同时给出 `legacySessionCount`。收到完整新索引后会重新分配旧的日期归属，保留尚未被索引覆盖的 live 后缀。
 
-统一 `inputTokens` 包含缓存读写输入，缓存计数是其子集，总 token 为 inputTokens + outputTokens。费用沿用带版本的来源估算；`unpricedSessions` 与 `costComplete` 标识缺价或部分估算，没有价格的非零用量不会显示成零费用。`groups` 是设备 + agent + 项目明细，`buckets` 按 groupBy 汇总。
+统一 `inputTokens` 包含缓存读写输入，缓存计数是其子集，总 token 为 inputTokens + outputTokens。费用优先沿用来源报告的金额；没有金额时，按 `byModel` 分模型用量与账号当前单价估算。`unpricedSessions`、`missingModels` 与 `costComplete` 标识缺价或部分估算，未知价格不会显示成零费用。`groups` 是设备 + agent + 项目明细，`buckets` 按 groupBy 汇总。CodexBar 专用 ClaudeProbe 额度探测目录不进入会话列表及统计，原始数据保留。
+
+`GET /api/pricing` 返回官方参考价、自定义覆盖及历史中未定价的模型；`PUT /api/pricing` 保存 `{ model, input, output, cacheRead, cacheWrite }`，四项单价单位为 USD / 百万 Token；`DELETE /api/pricing?model=...` 移除覆盖、恢复默认。价格按账号持久化，保存后统计查询会重算历史估算值。Web 和 Apple 的「设置 → 模型费用」均可编辑。空白代表未设置，免费须显式填 0。默认价格来源、核验日期及标准短上下文口径随接口返回，未知名称不会匹配相似模型；订阅费用和长上下文等额外倍率不在本估算内。
 
 `EVENT_RETENTION_DAYS` 默认 30；`AUDIT_RETENTION_DAYS` 默认 180。序号保存在会话行，因此事件清理不重置 seq。用量行不设置过期时间。保留期清理只作用于 AgentPanel 数据库，不触碰 daemon 原始会话日志。数据库迁移按文件名顺序执行幂等 SQL；0002 增加永久保存的 UTC 用量日表，各实体有 owner/expiry 索引，事件另有 session/seq 索引。
 

@@ -18,6 +18,7 @@ export const kinds = [
   "commands",
   "usage",
   "usage_days",
+  "model_prices",
   "audit",
   "push_subscriptions",
   "push_settings",

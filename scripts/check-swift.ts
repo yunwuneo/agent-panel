@@ -20,6 +20,39 @@ await Bun.write(
     ),
   ),
 );
+await Bun.write(
+  resolve(temp, "quota.json"),
+  JSON.stringify(
+    makeEnvelope("device.status", {
+      id: "quota-device",
+      name: "Quota device",
+      platform: "darwin",
+      online: true,
+      lastSeen: Date.now(),
+      agents: [
+        {
+          kind: "codex",
+          installed: true,
+          authenticated: false,
+          executionAvailable: false,
+          quota: {
+            status: "available",
+            checkedAt: Date.now(),
+            windows: [
+              {
+                id: "week",
+                label: "每周",
+                usedPercent: 7.5,
+                windowMinutes: 10080,
+                resetsAt: 1791050259000,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  ),
+);
 const compiler = Bun.spawn(
   [
     "swiftc",
@@ -36,7 +69,12 @@ const compiler = Bun.spawn(
 );
 if (await compiler.exited) process.exit(1);
 const runner = Bun.spawn(
-  [resolve(temp, "check"), resolve(temp, "envelope.json"), resolve(temp, "outgoing.json")],
+  [
+    resolve(temp, "check"),
+    resolve(temp, "envelope.json"),
+    resolve(temp, "outgoing.json"),
+    resolve(temp, "quota.json"),
+  ],
   {
     stdout: "inherit",
     stderr: "inherit",

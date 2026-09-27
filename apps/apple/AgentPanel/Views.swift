@@ -26,6 +26,7 @@ struct PanelBackdrop: View {
 
 struct RootView: View {
     @Bindable var model: AppModel
+    @State private var showDevices = false
     @State private var showStats = false
     @State private var showSettings = false
     @State private var showNew = false
@@ -48,6 +49,7 @@ struct RootView: View {
                         } header: { Text("工作空间") }
                         Section {
                             Button { showPair = true; Task { await model.pair() } } label: { Label("连接设备", systemImage: "plus.circle") }
+                            Button { showDevices = true } label: { Label("设备与订阅额度", systemImage: "gauge.with.dots.needle.50percent") }
                             Button { showStats = true } label: { Label("用量统计", systemImage: "chart.xyaxis.line") }
                             Button { showSettings = true } label: { Label("设置", systemImage: "slider.horizontal.3") }
                         }
@@ -81,6 +83,7 @@ struct RootView: View {
         }
         .tint(Color(red: 0.16, green: 0.45, blue: 0.75))
         .sheet(isPresented: $showNew) { NewSessionView(model: model) }
+        .sheet(isPresented: $showDevices) { DeviceQuotaView(model: model) }
         .sheet(isPresented: $showStats) { StatsView(model: model) }
         .sheet(isPresented: $showSettings) { SettingsView(model: model) }
         .sheet(isPresented: $showPair) { PairingView(model: model) }
@@ -150,7 +153,7 @@ struct SessionDetail: View {
                 HStack(alignment: .bottom, spacing: 12) {
                     TextField("继续这个想法…", text: $prompt, axis: .vertical).lineLimit(1...7).textFieldStyle(.plain).padding(10).onSubmit { submit(session) }
                     if session.status == "running" || session.status == "waiting" {
-                        Button { Task { await model.perform { _ = try await model.command("session.interrupt", device: session.deviceId, session: session.id) } } } label: { Image(systemName: "stop.fill").padding(8) }.help("中断当前轮次")
+                        Button { Task { await model.perform { _ = try await model.command("session.interrupt", device: session.deviceId, session: session.id) } } } label: { Image(systemName: "stop.fill").padding(8) }.help("中断当前轮次").disabled(session.readOnly || !model.isConnected)
                     } else {
                         Button { submit(session) } label: { Image(systemName: "arrow.up").fontWeight(.semibold).padding(8) }.buttonStyle(.borderedProminent).disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session.readOnly || !model.isConnected)
                     }
@@ -265,5 +268,77 @@ struct ApprovalCard: View {
             Text(approval.input.pretty).font(.system(.caption, design: .monospaced)).lineLimit(12).textSelection(.enabled)
             HStack { Text("有效期至 \(Date(timeIntervalSince1970: Double(approval.expiresAt) / 1000).formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.secondary); Spacer(); Button("拒绝", role: .destructive) { Task { await model.decide(approval, allow: false) } }; Button("允许这一次") { Task { await model.decide(approval, allow: true) } }.buttonStyle(.borderedProminent) }.disabled(model.isBusy)
         }.padding(22).panelGlass()
+    }
+}
+
+
+struct DeviceQuotaView: View {
+    @Bindable var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var refreshing = Set<String>()
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(model.devices, id: \.id) { device in
+                    Section {
+                        HStack {
+                            Label(device.online ? "在线" : "离线", systemImage: "circle.fill").foregroundStyle(device.online ? .green : .secondary)
+                            Spacer()
+                            Button("刷新额度") {
+                                refreshing.insert(device.id)
+                                Task {
+                                    defer { refreshing.remove(device.id) }
+                                    await model.perform { _ = try await model.command("device.refresh", device: device.id, awaitResult: true) }
+                                }
+                            }.disabled(!device.online || !model.isConnected || refreshing.contains(device.id))
+                        }
+                        ForEach(device.agents, id: \.kind) { agent in
+                            AgentQuotaView(agent: agent, online: device.online)
+                        }
+                    } header: { Text(device.name) }
+                }
+            }
+            .navigationTitle("设备与订阅额度")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }.frame(minWidth: 340, idealWidth: 560, minHeight: 480)
+    }
+}
+
+struct AgentQuotaView: View {
+    let agent: APAgentCapability
+    let online: Bool
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            let now = context.date.timeIntervalSince1970 * 1000
+            let execution = agent.executionAvailable ?? agent.authenticated
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(agent.kind == "claude" ? "Claude Code" : "Codex").font(.headline)
+                    Spacer()
+                    Text(!agent.installed ? "未安装" : execution == true ? "可运行任务" : execution == false ? "运行受限" : "运行状态未知").font(.caption).foregroundStyle(.secondary)
+                }
+                if let version = agent.version { Text(version).font(.caption2).foregroundStyle(.secondary) }
+                if let message = agent.authMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+                if let quota = agent.quota {
+                    let stale = !online || quota.status == "stale" || quota.staleAt.map { now >= Double($0) } == true
+                    ForEach(quota.windows, id: \.id) { window in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack { Text(window.label); Spacer(); Text("\(stale ? "上次剩余" : "剩余") \(String(format: "%.1f", 100 - window.usedPercent))%") }.font(.caption)
+                            ProgressView(value: 100 - window.usedPercent, total: 100).opacity(stale ? 0.45 : 1)
+                                .accessibilityLabel("\(window.label)\(stale ? "上次" : "")剩余百分比")
+                            if let reset = window.resetsAt { Text("\(quotaDate(reset)) 重置\(now >= Double(reset) ? "（待刷新）" : "")").font(.caption2).foregroundStyle(.secondary) }
+                        }
+                    }
+                    if let message = quota.message, quota.windows.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary) }
+                    if stale && !quota.windows.isEmpty { Text(online ? "额度数据已过期，等待刷新" : "设备离线，显示上次查询结果").font(.caption).foregroundStyle(.secondary) }
+                    if let source = quota.source { Text(source).font(.caption2).foregroundStyle(.secondary) }
+                    if let updated = quota.updatedAt { Text("\(quotaDate(updated)) 更新").font(.caption2).foregroundStyle(.secondary) }
+                    if let retry = quota.retryAt, Double(retry) > now { Text("\(quotaDate(retry)) 后可重试").font(.caption2).foregroundStyle(.secondary) }
+                } else { Text("额度信息尚未上报，请确认 Daemon 与 Relay 均已更新并重启").font(.caption).foregroundStyle(.secondary) }
+            }.padding(.vertical, 6)
+        }
+    }
+    private func quotaDate(_ milliseconds: Int) -> String {
+        Date(timeIntervalSince1970: Double(milliseconds) / 1000).formatted(date: .abbreviated, time: .shortened)
     }
 }

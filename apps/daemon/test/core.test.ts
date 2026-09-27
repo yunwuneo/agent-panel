@@ -185,7 +185,7 @@ describe("本地日志兼容与统计", () => {
       config({ claudeHome: join(root, "claude"), codexHome: join(root, "absent") }),
       store,
       (sessions) => {
-        batches.push(sessions);
+        if (sessions.length) batches.push(sessions);
       },
     );
     expect(await indexer.scan()).toHaveLength(0);
@@ -726,7 +726,10 @@ describe("分发与远程重连", () => {
       calls++;
       return { ok: true };
     };
-    const relay = new RelayConnection(cfg, store, manager, []);
+    let refreshes = 0;
+    const relay = new RelayConnection(cfg, store, manager, [], () => {
+      refreshes++;
+    });
     relay.start();
     try {
       for (let i = 0; i < 100 && !ws; i++) await tick();
@@ -735,6 +738,44 @@ describe("分发与远程重连", () => {
       ws.send(JSON.stringify(command));
       for (let i = 0; i < 100 && !received.some((m) => m.type === "result"); i++) await tick();
       expect(calls).toBe(1);
+      const refresh = makeEnvelope("device.refresh", {}, { deviceId: "d" });
+      ws.send(JSON.stringify(refresh));
+      ws.send(JSON.stringify(refresh));
+      for (
+        let i = 0;
+        i < 100 && !received.some((m) => m.type === "result" && m.payload.requestId === refresh.id);
+        i++
+      )
+        await tick();
+      expect(refreshes).toBe(1);
+      expect(calls).toBe(1);
+      relay.updateAgents([
+        {
+          kind: "codex",
+          installed: true,
+          executionAvailable: false,
+          quota: {
+            status: "available",
+            checkedAt: Date.now(),
+            windows: [{ id: "week", label: "每周", usedPercent: 7 }],
+          },
+        },
+      ]);
+      for (
+        let i = 0;
+        i < 100 &&
+        !received.some(
+          (m) => m.type === "device.hello" && m.payload.agents[0]?.quota?.status === "available",
+        );
+        i++
+      )
+        await tick();
+      expect(
+        received.some(
+          (m) =>
+            m.type === "device.hello" && m.payload.agents[0]?.quota?.windows[0]?.usedPercent === 7,
+        ),
+      ).toBe(true);
       expect(received.some((m) => m.type === "ack" && m.payload.ackId === command.id)).toBe(true);
       ws.close(1012, "restart");
       await tick();

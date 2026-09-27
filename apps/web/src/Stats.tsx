@@ -40,9 +40,18 @@ interface StatsData {
     totals?: Totals;
   })[];
   priceVersion: string;
+  missingModels?: string[];
 }
 
-export default function Stats({ devices, sessions }: { devices: Device[]; sessions: Session[] }) {
+export default function Stats({
+  devices,
+  sessions,
+  onPricing,
+}: {
+  devices: Device[];
+  sessions: Session[];
+  onPricing?: () => void;
+}) {
   const [days, setDays] = useState("30");
   const [deviceId, setDeviceId] = useState("");
   const [agent, setAgent] = useState("");
@@ -213,6 +222,12 @@ export default function Stats({ devices, sessions }: { devices: Device[]; sessio
                     ? "USD · 仅含已知价格的部分用量"
                     : "USD · 基于可用用量和价格"}
                 </small>
+                <button type="button" className="text-button" onClick={onPricing}>
+                  设置模型单价
+                  {query.data.missingModels?.length
+                    ? ` · ${query.data.missingModels.length} 项未定价`
+                    : ""}
+                </button>
               </div>
               <div className="stat-metric glass">
                 <span>

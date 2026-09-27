@@ -242,6 +242,7 @@ export async function probeClaude(config: Config): Promise<AgentCapability> {
     installed: !!executable,
     ...(version ? { version } : {}),
     authenticated: auth.available && !!executable,
+    executionAvailable: auth.available && !!executable,
     authMessage: executable
       ? auth.message
       : "请先在本地安装 Claude Code（编译版 daemon 使用本机 CLI）",

@@ -1,5 +1,11 @@
 import { join } from "node:path";
-import type { AgentCapability, SessionEvent, Usage } from "@agentpanel/protocol";
+import {
+  type AgentCapability,
+  combineModelUsage,
+  modelParts,
+  type SessionEvent,
+  type Usage,
+} from "@agentpanel/protocol";
 import type { Config } from "../config";
 import { codexUsage, emptyUsage, mergeUsage } from "../indexer";
 import { type RpcMessage, RpcProcess } from "./rpc";
@@ -91,6 +97,7 @@ export class CodexAdapter implements AgentAdapter {
       if (!this.config.allowPaidApi && result.modelProvider !== "openai")
         throw new Error("解析后的会话不是官方 OpenAI 提供方；付费调用未获授权，已停止");
       this.nativeId = result.thread.id;
+      this.usage.model = result.model ?? context.model ?? this.usage.model;
       this.initialized = true;
       this.emit({
         kind: "message.done",
@@ -184,7 +191,21 @@ export class CodexAdapter implements AgentAdapter {
         break;
       case "thread/tokenUsage/updated":
         if (p.tokenUsage?.total) {
-          this.usage = mergeUsage(this.usage, codexUsage(p.tokenUsage.total));
+          const previous = this.usage;
+          this.usage = mergeUsage(previous, codexUsage(p.tokenUsage.total));
+          this.usage.byModel = combineModelUsage(
+            modelParts(previous),
+            [
+              {
+                model: this.usage.model,
+                inputTokens: this.usage.inputTokens - previous.inputTokens,
+                outputTokens: this.usage.outputTokens - previous.outputTokens,
+                cacheReadTokens: this.usage.cacheReadTokens - previous.cacheReadTokens,
+                cacheWriteTokens: this.usage.cacheWriteTokens - previous.cacheWriteTokens,
+              },
+            ],
+            "add",
+          );
           this.emit({ kind: "usage", usage: this.usage });
         }
         break;
@@ -321,6 +342,7 @@ export async function probeCodex(config: Config): Promise<AgentCapability> {
       kind: "codex",
       installed: false,
       authenticated: false,
+      executionAvailable: false,
       authMessage: "请在本地安装 Codex CLI",
     };
   const process = Bun.spawn([executable, "--version"], { stdout: "pipe", stderr: "ignore" });
@@ -333,6 +355,7 @@ export async function probeCodex(config: Config): Promise<AgentCapability> {
       installed: true,
       version,
       authenticated: false,
+      executionAvailable: false,
       models: [],
       authMessage: profileProblem,
     };
@@ -357,6 +380,7 @@ export async function probeCodex(config: Config): Promise<AgentCapability> {
       installed: true,
       version,
       authenticated,
+      executionAvailable: authenticated,
       models: (models.data ?? []).map((m: any) => m.model ?? m.id),
       authMessage: authenticated
         ? `已登录（${account.account?.type ?? "external-provider"}）`
@@ -364,13 +388,14 @@ export async function probeCodex(config: Config): Promise<AgentCapability> {
           ? "当前模型提供方可能产生 API 费用，allowPaidApi=false"
           : "请运行 codex login",
     };
-  } catch (error) {
+  } catch {
     return {
       kind: "codex",
       installed: true,
       version,
       authenticated: false,
-      authMessage: String(error),
+      executionAvailable: false,
+      authMessage: "Codex 运行状态探测失败，请检查本机 CLI 配置与连接",
     };
   } finally {
     await rpc.close();

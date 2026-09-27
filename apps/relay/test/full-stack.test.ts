@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Envelope, makeEnvelope } from "@agentpanel/protocol";
@@ -343,6 +343,51 @@ test.skipIf(!databaseUrl)(
       expect(
         published.filter((e) => e.type === "approval.request" && e.payload.status === "allowed"),
       ).toHaveLength(1);
+
+      // Native sessions must carry independent execution and read-only states over the
+      // real daemon -> WebSocket -> PostgreSQL -> client API path.
+      const logs = join(temporary, "codex", "sessions");
+      await mkdir(logs, { recursive: true });
+      const logPath = join(logs, "rollout-local.jsonl");
+      const append = (rows: unknown[]) =>
+        appendFile(
+          logPath,
+          `${rows
+            .map((row) =>
+              JSON.stringify({ timestamp: new Date().toISOString(), ...(row as object) }),
+            )
+            .join("\n")}\n`,
+        );
+      await append([
+        { type: "session_meta", payload: { id: "local-activity", cwd: temporary } },
+        { type: "event_msg", payload: { type: "task_started", turn_id: "local-turn" } },
+      ]);
+      await manager.indexer.scan();
+      const localStatus = async (status: string) =>
+        (await request("/api/sessions")).sessions.some(
+          (s: any) => s.nativeId === "local-activity" && s.status === status && s.readOnly,
+        );
+      await eventually(
+        () => localStatus("running"),
+        "Local running state did not reach the client API",
+      );
+      expect(
+        browser.events.some(
+          (e) =>
+            e.type === "session.snapshot" &&
+            e.payload.sessions.some(
+              (s) => s.nativeId === "local-activity" && s.status === "running" && s.readOnly,
+            ),
+        ),
+      ).toBe(true);
+      await append([
+        { type: "event_msg", payload: { type: "task_complete", turn_id: "local-turn" } },
+      ]);
+      await manager.indexer.scan();
+      await eventually(
+        () => localStatus("completed"),
+        "Local completion did not reach the client API",
+      );
     } finally {
       await transport?.close();
       await manager?.close();

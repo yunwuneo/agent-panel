@@ -163,7 +163,7 @@ import Observation
             if !wasKnown { Task { try? await subscribe() } }
         }
         if envelope.type == "session.snapshot", let updates = try? envelope.payload["sessions"].decoded([APSession].self) {
-            let ids = Set(updates.map(\.id)); sessions.removeAll { ids.contains($0.id) }; sessions.append(contentsOf: updates)
+            let ids = Set(updates.map(\.id)); sessions.removeAll { ids.contains($0.id) }; sessions.append(contentsOf: updates.filter { $0.excludedReason == nil })
         }
         if currentEvent, envelope.type == "approval.request", let approval = try? envelope.payload.decoded(APApproval.self) {
             approvals.removeAll { $0.id == approval.id }; approvals.append(approval)

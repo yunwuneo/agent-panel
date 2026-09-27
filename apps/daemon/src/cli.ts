@@ -7,8 +7,10 @@ import { parseArgs } from "node:util";
 import { type Envelope, makeEnvelope } from "@agentpanel/protocol";
 import { probeClaude } from "./adapters/claude";
 import { probeCodex } from "./adapters/codex";
+import { CapabilityMonitor } from "./capabilities";
 import { configSchema, defaultConfigPath, loadConfig, pair, saveConfig, version } from "./config";
 import { SessionManager } from "./manager";
+import { queryQuota } from "./quota";
 import { installService, servicePlan, uninstallService } from "./services";
 import { Store } from "./store";
 import { RelayConnection } from "./transport";
@@ -17,9 +19,10 @@ import { installUpdate, stageUpdate } from "./updater";
 const help = `AgentPanel daemon ${version}
 
   agentpaneld init [--relay http://localhost:8787] [--config PATH] [--codex-home PATH] [--codex-provider openai]
-  agentpaneld pair --code CODE [--relay URL] [--name NAME]
-  agentpaneld run [--config PATH]
+  agentpaneld pair --code CODE [--relay URL] [--name NAME]  保存配对凭据，不启动 daemon
+  agentpaneld run [--config PATH]             连接 Relay，保持设备在线
   agentpaneld doctor [--json]                  检查安装和认证，不发起模型调用
+  agentpaneld quota [--json]                   查询本机订阅额度，不发起模型调用
   agentpaneld index [--json]                   扫描本地会话，不继续任何会话
   agentpaneld debug --agent codex --cwd DIR --prompt TEXT [--resume ID]
   agentpaneld install|uninstall [--preview]    当前用户的系统服务
@@ -79,6 +82,22 @@ export async function main(argv = process.argv.slice(2)) {
     if (!values.code) throw new Error("请通过 --code 提供客户端生成的配对码");
     const paired = await pair(config, values.code, configPath);
     console.log(`设备已配对：${paired.deviceId}`);
+    console.log("配对凭据已保存；请启动 daemon，设备才会上线：");
+    console.log(
+      process.argv[1]?.endsWith(".ts") ? "  bun apps/daemon/src/cli.ts run" : "  agentpaneld run",
+    );
+    if (values.config) console.log(`启动时请继续使用 --config 指定同一配置文件：${configPath}`);
+    console.log("保持终端开启，看到“设备已连接 Relay”后即可操作。后台常驻可使用 install 命令。");
+    return;
+  }
+  if (command === "quota") {
+    const quotas = await Promise.all(
+      (["codex", "claude"] as const).map(async (kind) => ({
+        kind,
+        quota: await queryQuota(config, kind, new AbortController().signal),
+      })),
+    );
+    console.log(JSON.stringify(quotas, null, values.json ? undefined : 2));
     return;
   }
   if (command === "doctor") {
@@ -165,6 +184,7 @@ export async function main(argv = process.argv.slice(2)) {
     `${configPath}.${command === "debug" ? "debug" : deviceNamespace}.sqlite`,
   );
   let connection: RelayConnection | undefined;
+  let capabilities: CapabilityMonitor | undefined;
   let manager: SessionManager;
   let closeStarted = false;
   let updateTimer: ReturnType<typeof setInterval> | undefined;
@@ -172,6 +192,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (closeStarted) return;
     closeStarted = true;
     if (updateTimer) clearInterval(updateTimer);
+    await capabilities?.close();
     await connection?.close();
     await manager?.close();
     store.close();
@@ -292,8 +313,14 @@ export async function main(argv = process.argv.slice(2)) {
       return;
     }
     const agents = await Promise.all([probeClaude(config), probeCodex(config)]);
-    connection = new RelayConnection(config, store, manager, agents);
+    capabilities = new CapabilityMonitor(config, agents, (updated) =>
+      connection?.updateAgents(updated),
+    );
+    connection = new RelayConnection(config, store, manager, capabilities.agents, () => {
+      void capabilities?.refresh(true);
+    });
     connection.start();
+    capabilities.start();
     await manager.start();
     if (config.autoUpdate) {
       updateTimer = setInterval(

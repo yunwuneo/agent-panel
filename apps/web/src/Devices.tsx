@@ -1,11 +1,23 @@
 import type { Device } from "@agentpanel/protocol";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Check, Copy, Link2, Pencil, Plus, ShieldCheck, Unplug } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  Copy,
+  Link2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Unplug,
+} from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 import { api, errorText, post } from "./api";
+import { command } from "./connection";
 import { timeAgo } from "./events";
-import { AgentMark, DeviceIcon, Empty, Modal, Notice, PageHeading, Spinner } from "./ui";
+import { AgentQuotaCard } from "./Quota";
+import { DeviceIcon, Empty, Modal, Notice, PageHeading, Spinner } from "./ui";
 
 export function Devices({
   devices,
@@ -24,6 +36,7 @@ export function Devices({
   const [revoking, setRevoking] = useState<Device>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState<string>();
   async function update(action: "rename" | "revoke") {
     const device = action === "rename" ? editing : revoking;
     if (!device) return;
@@ -101,17 +114,9 @@ export function Devices({
                 {device.online ? "随时准备接续工作" : `上次连接 ${timeAgo(device.lastSeen)}`}
               </p>
               <div className="device-agents">
-                {device.agents
-                  .filter((agent) => agent.installed)
-                  .map((agent) => (
-                    <div key={agent.kind}>
-                      <AgentMark agent={agent.kind} small />
-                      <span>{agent.kind === "claude" ? "Claude Code" : "Codex"}</span>
-                      <small>
-                        {agent.authenticated === false ? "需要登录" : agent.version || "已安装"}
-                      </small>
-                    </div>
-                  ))}
+                {device.agents.map((agent) => (
+                  <AgentQuotaCard key={agent.kind} agent={agent} online={device.online} />
+                ))}
                 {!device.agents.some((agent) => agent.installed) && (
                   <p className="muted">尚未检测到可用的 Agent</p>
                 )}
@@ -127,6 +132,25 @@ export function Devices({
                   <ArrowRight size={15} />
                 </button>
                 <div>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`刷新 ${device.name} 的订阅额度`}
+                    disabled={!device.online || refreshing === device.id}
+                    onClick={async () => {
+                      setRefreshing(device.id);
+                      try {
+                        await command("device.refresh", {}, { deviceId: device.id });
+                        onNotify("已请求刷新额度；频繁刷新或服务限流时会稍后更新");
+                      } catch (error) {
+                        onNotify(errorText(error));
+                      } finally {
+                        setRefreshing(undefined);
+                      }
+                    }}
+                  >
+                    <RefreshCw size={16} />
+                  </button>
                   <button
                     type="button"
                     className="icon-button"
@@ -259,7 +283,7 @@ export function PairDevice({ onClose }: { onClose: () => void }) {
   const remaining = pair ? Math.max(0, Math.ceil((pair.expiresAt - now) / 1000)) : 0;
   return (
     <Modal title="把设备带进工作空间" eyebrow="CONNECT A DEVICE" onClose={onClose}>
-      <p className="muted">在目标设备上启动 Daemon，使用一次性配对码与当前账号连接。</p>
+      <p className="muted">在目标设备上使用一次性配对码绑定当前账号，再启动 Daemon。</p>
       {error && <Notice>{error}</Notice>}
       {pair && remaining > 0 ? (
         <>
@@ -294,12 +318,17 @@ export function PairDevice({ onClose }: { onClose: () => void }) {
             仅可使用一次
           </p>
           <div className="command-example">
-            <span>在目标设备上运行</span>
+            <span>在目标设备上依次运行</span>
             <code>
               agentpaneld pair --relay {location.origin} --code {pair.code}
+              <br />
+              agentpaneld run
             </code>
           </div>
-          <Notice tone="info">连接成功后，设备会自动出现在设备列表中。</Notice>
+          <Notice tone="info">
+            配对只保存凭据。运行 agentpaneld run 并保持终端开启，看到“设备已连接
+            Relay”后设备才会上线。
+          </Notice>
         </>
       ) : (
         <div className="pair-start">

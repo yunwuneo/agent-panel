@@ -152,10 +152,29 @@ test.skipIf(!databaseUrl)(
           },
         ),
       );
+      expect(
+        (
+          await relay.request(
+            "/api/pricing",
+            { model: "custom-model", input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.5 },
+            "PUT",
+          )
+        ).status,
+      ).toBe(200);
       await store.close();
       store = PostgresStore.connect(url.toString());
       const restarted = createRelay(store, config);
       await restarted.initialize();
+      const pricingResponse = await restarted.app.request("/api/pricing", {
+        headers: { authorization: `Bearer ${relay.credentials.accessToken}` },
+      });
+      const pricing = (await pricingResponse.json()) as {
+        models: { model: string; source: string; price: { input: number } }[];
+      };
+      expect(pricing.models.find((row) => row.model === "custom-model")).toMatchObject({
+        source: "custom",
+        price: { input: 1 },
+      });
       expect((await restarted.auth.authenticate(relay.credentials.accessToken)).owner).toBe(
         relay.principal.owner,
       );

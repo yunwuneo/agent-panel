@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { AgentCapabilitySchema, parseEnvelope } from "@agentpanel/protocol";
+import { AgentCapabilitySchema, ModelPriceSchema, parseEnvelope } from "@agentpanel/protocol";
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -19,6 +19,7 @@ import {
 } from "./auth";
 import type { RelayConfig } from "./config";
 import { Hub } from "./hub";
+import { priceCatalog, priceId } from "./pricing";
 import { PushService } from "./push";
 import type { Store } from "./store";
 
@@ -307,6 +308,23 @@ export function createRelay(store: Store, config: RelayConfig, webauthn?: WebAut
         input.reason,
       ),
     });
+  });
+  app.get("/api/pricing", async (c) => c.json(await priceCatalog(store, c.get("principal").owner)));
+  app.put("/api/pricing", async (c) => {
+    const price = await body(c, ModelPriceSchema);
+    const owner = c.get("principal").owner;
+    await store.put("model_prices", {
+      id: priceId(owner, price.model),
+      owner,
+      createdAt: Date.now(),
+      price,
+    });
+    return c.json({ ok: true });
+  });
+  app.delete("/api/pricing", async (c) => {
+    const model = ModelPriceSchema.shape.model.parse(c.req.query("model"));
+    await store.remove("model_prices", priceId(c.get("principal").owner, model));
+    return c.json({ ok: true });
   });
   app.get("/api/stats", async (c) => {
     const input = z

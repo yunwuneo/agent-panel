@@ -23,6 +23,7 @@ export class RelayConnection {
     private store: Store,
     private manager: SessionManager,
     private agents: AgentCapability[],
+    private refreshCapabilities?: () => void,
   ) {}
   publish(message: Envelope) {
     this.store.enqueue(message);
@@ -60,19 +61,7 @@ export class RelayConnection {
       this.retry = 0;
       this.sent.clear();
       this.lastReceived = Date.now();
-      this.publish(
-        makeEnvelope(
-          "device.hello",
-          {
-            name: this.config.name,
-            platform: platform(),
-            hostname: hostname(),
-            version,
-            agents: this.agents,
-          },
-          { deviceId: this.config.deviceId },
-        ),
-      );
+      this.publishHello();
       this.manager.snapshotAll();
       this.flush();
       this.heartbeat = setInterval(() => {
@@ -110,6 +99,25 @@ export class RelayConnection {
     this.socket.addEventListener("error", () => {
       this.socket?.close();
     });
+  }
+  updateAgents(agents: AgentCapability[]) {
+    this.agents = agents;
+    if (!this.stopped && this.socket?.readyState === WebSocket.OPEN) this.publishHello();
+  }
+  private publishHello() {
+    this.publish(
+      makeEnvelope(
+        "device.hello",
+        {
+          name: this.config.name,
+          platform: platform(),
+          hostname: hostname(),
+          version,
+          agents: this.agents,
+        },
+        { deviceId: this.config.deviceId },
+      ),
+    );
   }
   private send(message: Envelope) {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
@@ -152,7 +160,11 @@ export class RelayConnection {
     this.store.startCommand(command.id);
     let result: Envelope;
     try {
-      result = commandResult(command, { data: await this.manager.command(command) });
+      if (command.type === "device.refresh") {
+        if (!this.refreshCapabilities) throw new Error("当前设备不支持额度刷新，请更新 daemon");
+        this.refreshCapabilities();
+        result = commandResult(command, { data: { accepted: true } });
+      } else result = commandResult(command, { data: await this.manager.command(command) });
     } catch (error) {
       result = commandResult(command, {
         error: error instanceof Error ? error.message : String(error),

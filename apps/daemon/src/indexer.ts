@@ -5,16 +5,20 @@ import { join } from "node:path";
 import {
   type AgentKind,
   addUsage,
+  combineModelUsage,
+  isQuotaProbe,
+  modelParts,
   type Session,
   type SessionEvent,
   type Usage,
 } from "@agentpanel/protocol";
 import type { Config } from "./config";
 import { boundedEvent } from "./event-limits";
+import { type LocalActivity, localActivity } from "./local-activity";
 import type { Store } from "./store";
 
 type RecordValue = Record<string, any>;
-export type IndexedSession = Session & { logPath: string };
+export type IndexedSession = Session & { logPath: string; localActivity?: LocalActivity };
 export type ScanState = {
   session?: IndexedSession;
   messages: Record<string, Usage>;
@@ -26,7 +30,7 @@ export type ScanState = {
   codexLastUsage?: Usage;
   durations?: Record<string, number>;
 };
-const parserVersion = 3;
+const parserVersion = 6;
 const number = (n: unknown) => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : 0);
 export const emptyUsage = (): Usage => ({
   inputTokens: 0,
@@ -99,6 +103,9 @@ function positiveDelta(after: Usage, before: Usage): Usage {
       : {}),
     model: after.model,
     pricingVersion: after.pricingVersion,
+    ...(after.byModel
+      ? { byModel: combineModelUsage(after.byModel, modelParts(before), "subtract") }
+      : {}),
   };
 }
 function addDay(session: IndexedSession, date: string, increment: Usage) {
@@ -138,6 +145,7 @@ function accumulateCodex(state: ScanState, raw: RecordValue) {
   };
   state.codexLastUsage = current;
   const session = state.session!;
+  increment.byModel = [{ ...increment, model: session.usage?.model }];
   session.usage = { ...session.usage, ...addUsage(session.usage ?? emptyUsage(), increment) };
 }
 function recordDuration(state: ScanState, id: string, duration: number, end: number) {
@@ -210,10 +218,12 @@ export function parseRecord(
   }
   const session = state.session;
   if (!session) return [];
+  session.localActivity = localActivity(agent, record, session.localActivity, ts);
   const previousUsage = { ...(session.usage ?? emptyUsage()) };
   let activeSpan: { start: number; end: number; increment: number } | undefined;
   session.updatedAt = Math.max(session.updatedAt, ts);
   if (cwd && (record.type === "turn_context" || !session.cwd)) session.cwd = cwd;
+  session.excludedReason = isQuotaProbe(session) ? "quota-probe" : undefined;
   const events: SessionEvent[] = [];
   if (agent === "claude") {
     const message = record.message;
@@ -255,16 +265,16 @@ export function parseRecord(
             });
         }
       if (message.usage && message.id) {
-        const next = claudeUsage(message.usage);
+        const next = {
+          ...claudeUsage(message.usage),
+          model: message.model ?? state.messages[message.id]?.model,
+        };
         state.messages[message.id] = mergeUsage(state.messages[message.id] ?? emptyUsage(), next);
-        const total = emptyUsage();
+        let total = emptyUsage();
         for (const usage of Object.values(state.messages)) {
-          total.inputTokens += usage.inputTokens;
-          total.outputTokens += usage.outputTokens;
-          total.cacheReadTokens += usage.cacheReadTokens;
-          total.cacheWriteTokens += usage.cacheWriteTokens;
+          total = addUsage(total, { ...usage, byModel: modelParts(usage) });
         }
-        total.model = message.model;
+        total.model = next.model ?? session.usage?.model;
         total.turns = state.turnIds.length;
         total.activeMs = session.usage?.activeMs ?? 0;
         session.usage = mergeUsage(session.usage ?? emptyUsage(), total);
@@ -400,15 +410,30 @@ export class LocalSessionIndexer {
   private watchers: FSWatcher[] = [];
   private interval?: ReturnType<typeof setInterval>;
   private scanning = false;
+  private watchTimer?: ReturnType<typeof setTimeout>;
+  private rescan = false;
+  private stopped = false;
+  private scanTask?: Promise<IndexedSession[]>;
   constructor(
     private config: Config,
     private store: Store,
-    private onSessions: (sessions: IndexedSession[]) => void | Promise<void>,
+    private onSessions: (
+      sessions: IndexedSession[],
+      changedPaths: Set<string>,
+    ) => void | Promise<void>,
   ) {}
-  async scan(): Promise<IndexedSession[]> {
-    if (this.scanning) return [];
+  scan(): Promise<IndexedSession[]> {
+    if (this.scanning) {
+      this.rescan = true;
+      return this.scanTask!;
+    }
+    this.scanTask = this.scanOnce();
+    return this.scanTask;
+  }
+  private async scanOnce(): Promise<IndexedSession[]> {
     this.scanning = true;
     const changed: IndexedSession[] = [];
+    const indexed: IndexedSession[] = [];
     try {
       for (const [agent, root] of [
         ["claude", join(this.config.claudeHome, "projects")],
@@ -425,7 +450,10 @@ export class LocalSessionIndexer {
               scan.body.parserVersion !== parserVersion)
           )
             scan = undefined;
-          if (scan?.offset === info.size) continue;
+          if (scan?.offset === info.size) {
+            if (scan.body.session) indexed.push(scan.body.session);
+            continue;
+          }
           const state: ScanState = scan?.body ?? {
             messages: {},
             turnIds: [],
@@ -475,18 +503,24 @@ export class LocalSessionIndexer {
           }
           this.store.setScan(path, offset, remainder, state);
           if (state.session) {
-            this.store.putSession(state.session);
             changed.push(state.session);
+            indexed.push(state.session);
           }
         }
       }
-      if (changed.length) await this.onSessions(changed);
+      // Occupancy can change without a byte being appended. Also restore status after restart.
+      await this.onSessions(indexed, new Set(changed.map((session) => session.logPath)));
       return changed;
     } finally {
       this.scanning = false;
+      if (this.rescan && !this.stopped) {
+        this.rescan = false;
+        this.scheduleScan();
+      }
     }
   }
   async start() {
+    this.stopped = false;
     await this.scan();
     this.interval = setInterval(
       () => void this.scan().catch((e) => console.error("历史索引失败:", String(e))),
@@ -498,21 +532,25 @@ export class LocalSessionIndexer {
       join(this.config.codexHome, "sessions"),
     ]) {
       try {
-        this.watchers.push(
-          watch(
-            path,
-            { recursive: true },
-            () => void this.scan().catch((e) => console.error("历史索引失败:", String(e))),
-          ),
-        );
+        this.watchers.push(watch(path, { recursive: true }, () => this.scheduleScan()));
       } catch {
         /* Polling handles absent trees and unsupported recursive watch. */
       }
     }
   }
-  stop() {
+  private scheduleScan() {
+    if (this.stopped || this.watchTimer) return;
+    this.watchTimer = setTimeout(() => {
+      this.watchTimer = undefined;
+      void this.scan().catch((e) => console.error("历史索引失败:", String(e)));
+    }, 250);
+  }
+  async stop() {
+    this.stopped = true;
     if (this.interval) clearInterval(this.interval);
+    if (this.watchTimer) clearTimeout(this.watchTimer);
     for (const watcher of this.watchers) watcher.close();
+    await this.scanTask?.catch(() => {});
   }
   async history(session: IndexedSession, limit = 200, before?: number) {
     const events: SessionEvent[] = [];

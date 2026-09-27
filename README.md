@@ -33,12 +33,15 @@ bun apps/daemon/src/cli.ts doctor
 bun apps/daemon/src/cli.ts run
 ```
 
+`pair` 成功只表示配对凭据已保存；还需运行 `run` 并保持终端开启。看到“设备已连接 Relay”后设备才会上线。仅完成配对、未启动 daemon 时显示离线属于预期状态。
+
 目录白名单可配置；`*` 明确表示全文件系统访问。本项目当前用户选择全范围开放。会话正在本地使用或无法可靠判断占用时，仍保持只读。审批超时、取消或无效时拒绝执行。详见 [Daemon 使用说明](apps/daemon/README.md)。
 
 **认证要求：**
 
 - Codex 通过官方 `codex app-server` 使用已有 ChatGPT 登录。若原有配置指向第三方 API provider，需显式选择官方 provider 和干净的配置目录；不会自动回退到可能计费的 API。
-- Claude 使用官方 Agent SDK 和允许的 API/provider 凭据。Anthropic 不允许第三方应用直接复用 Claude 订阅登录额度；默认禁止新增 API 费用。未配置受支持凭据时，应用显示不可用原因。
+- Claude 任务执行使用官方 Agent SDK 和允许的 API/provider 凭据，不复用 Claude 订阅额度生成模型输出；默认禁止新增 API 费用。未配置受支持凭据时，应用显示不可用原因。
+- 订阅额度由 AgentPanel 独立查询，无需 CodexBar。设备页分别展示剩余额度和任务执行能力；可用 `bun apps/daemon/src/cli.ts quota --json` 本地检查，认证来源与刷新设置见 [Daemon 使用说明](apps/daemon/README.md#订阅额度查询)。
 
 ## 功能与运行方式
 

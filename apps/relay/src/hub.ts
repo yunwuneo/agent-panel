@@ -2,6 +2,7 @@ import {
   COMMAND_TYPES,
   type Device,
   type Envelope,
+  isQuotaProbe,
   makeEnvelope,
   parseEnvelope,
   type Session,
@@ -644,6 +645,8 @@ export class Hub {
     return [...canonical.values()]
       .filter(
         (s) =>
+          !s.excludedReason &&
+          !isQuotaProbe(s) &&
           (!filter.deviceId || s.deviceId === filter.deviceId) &&
           (!filter.agent || s.agent === filter.agent) &&
           (!filter.project || s.cwd === filter.project),

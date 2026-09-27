@@ -43,8 +43,11 @@ export default function NewSession({
     () =>
       devices
         .find((device) => device.id === deviceId)
-        ?.agents.find((candidate) => candidate.installed && candidate.authenticated !== false)
-        ?.kind || "claude",
+        ?.agents.find(
+          (candidate) =>
+            candidate.installed &&
+            (candidate.executionAvailable ?? candidate.authenticated) !== false,
+        )?.kind || "claude",
   );
   const [model, setModel] = useState("");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
@@ -106,7 +109,9 @@ export default function NewSession({
     setModel("");
     const first = devices
       .find((device) => device.id === id)
-      ?.agents.find((item) => item.installed && item.authenticated !== false);
+      ?.agents.find(
+        (item) => item.installed && (item.executionAvailable ?? item.authenticated) !== false,
+      );
     if (first) setAgent(first.kind);
   }
   return (
@@ -235,7 +240,9 @@ export default function NewSession({
                   type="button"
                   className={agent === kind ? "selected" : ""}
                   key={kind}
-                  disabled={!cap?.installed || cap.authenticated === false}
+                  disabled={
+                    !cap?.installed || (cap.executionAvailable ?? cap.authenticated) === false
+                  }
                   onClick={() => {
                     setAgent(kind);
                     setModel("");
@@ -247,8 +254,8 @@ export default function NewSession({
                     <small>
                       {!cap?.installed
                         ? "尚未安装"
-                        : cap.authenticated === false
-                          ? "需要在设备上登录"
+                        : (cap.executionAvailable ?? cap.authenticated) === false
+                          ? cap.authMessage || "当前设备暂不可运行任务"
                           : kind === "claude"
                             ? "从想法到细节，协作创造"
                             : "理解代码，专注完成"}
@@ -311,7 +318,7 @@ export default function NewSession({
                 busy ||
                 !device?.online ||
                 !capability?.installed ||
-                capability.authenticated === false ||
+                (capability.executionAvailable ?? capability.authenticated) === false ||
                 !cwd.trim() ||
                 !prompt.trim()
               }
