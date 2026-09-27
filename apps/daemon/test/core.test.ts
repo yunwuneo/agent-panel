@@ -55,6 +55,19 @@ describe("目录与持久化安全", () => {
     expect((await listDirectories(safe, [safe])).entries.map((e) => e.name)).toEqual(["project"]);
     expect(await allowedDirectory(outside, ["*"])).toEndWith("/safe-elsewhere");
     expect(() => validateRelayUrl("http://example.com")).toThrow("HTTPS");
+    expect(() => validateRelayUrl("http://8.8.8.8:8787")).toThrow("HTTPS");
+    expect(() => validateRelayUrl("http://172.32.0.1:8787")).toThrow("HTTPS");
+    for (const local of [
+      "http://192.168.31.42:8787",
+      "http://10.0.0.5:8787",
+      "http://172.16.0.1:8787",
+      "http://169.254.1.2:8787",
+      "http://my-mac.local:8787",
+      "http://[fd00::1]:8787",
+      "http://[fe80::1]:8787",
+    ]) {
+      expect(validateRelayUrl(local).hostname).toBeTruthy();
+    }
     expect(() => validateRelayUrl("https://secret@example.com")).toThrow();
   });
   test("离线事件与命令去重跨 SQLite 重启保留", async () => {
