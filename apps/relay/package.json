@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --hot src/index.ts",
+    "dev": "bun --hot --env-file=../../.env src/index.ts",
     "start": "bun src/index.ts",
     "migrate": "bun src/migrate.ts",
     "test": "bun test",
