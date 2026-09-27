@@ -12,6 +12,7 @@ import {
   FileCode2,
   History,
   LockKeyhole,
+  MessageCircleQuestion,
   ShieldCheck,
   Sparkles,
   Square,
@@ -451,15 +452,151 @@ function Message({ message, agent }: { message: ConversationItem; agent: "claude
 }
 
 export function ApprovalCard({ approval }: { approval: Approval }) {
-  const query = useQueryClient();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [reason, setReason] = useState("");
+  return approval.questions?.length ? (
+    <QuestionCard approval={approval} />
+  ) : (
+    <ToolApprovalCard approval={approval} />
+  );
+}
+
+function useCountdown() {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+  return now;
+}
+
+/** Agent 提问（Claude AskUserQuestion / Codex request_user_input）：选择选项或填写自定义回答。 */
+function QuestionCard({ approval }: { approval: Approval }) {
+  const query = useQueryClient();
+  const questions = approval.questions ?? [];
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const [other, setOther] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const now = useCountdown();
+  const expired = now >= approval.expiresAt;
+  const answerOf = (id: string) => {
+    const text = other[id]?.trim();
+    return [...(picked[id] ?? []), ...(text ? [text] : [])];
+  };
+  const complete = questions.every((q) => answerOf(q.id).length > 0);
+  function toggle(id: string, label: string, multi: boolean) {
+    setPicked((current) => {
+      const chosen = current[id] ?? [];
+      if (!multi) return { ...current, [id]: chosen[0] === label ? [] : [label] };
+      return {
+        ...current,
+        [id]: chosen.includes(label) ? chosen.filter((v) => v !== label) : [...chosen, label],
+      };
+    });
+    if (!multi) setOther((current) => ({ ...current, [id]: "" }));
+  }
+  async function submit(decision: "allow" | "deny") {
+    setBusy(true);
+    setError("");
+    try {
+      await post(`/approvals/${encodeURIComponent(approval.id)}/decision`, {
+        decision,
+        ...(decision === "allow"
+          ? { answers: Object.fromEntries(questions.map((q) => [q.id, answerOf(q.id)])) }
+          : {}),
+      });
+      await query.invalidateQueries({ queryKey: ["approvals"] });
+      await query.invalidateQueries({ queryKey: ["sessions"] });
+    } catch (error) {
+      setError(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <article className="approval-card question-card">
+      <div className="approval-heading">
+        <span>
+          <MessageCircleQuestion size={20} />
+        </span>
+        <div>
+          <strong>{expired ? "提问已过期" : "Agent 在等你的回答"}</strong>
+          <p>回答后，任务会继续执行</p>
+        </div>
+        <span className="approval-time">
+          <Clock3 size={12} />
+          {expired ? "已过期" : `${Math.ceil((approval.expiresAt - now) / 60000)} 分钟`}
+        </span>
+      </div>
+      {questions.map((q) => (
+        <fieldset key={q.id} className="question" disabled={busy || expired}>
+          <legend>
+            {q.header && <span className="question-tag">{q.header}</span>}
+            {q.question}
+            {q.multiSelect && <em>可多选</em>}
+          </legend>
+          <div className="question-options">
+            {q.options.map((option) => {
+              const active = picked[q.id]?.includes(option.label) ?? false;
+              return (
+                <button
+                  type="button"
+                  key={option.label}
+                  className={active ? "question-option active" : "question-option"}
+                  aria-pressed={active}
+                  onClick={() => toggle(q.id, option.label, !!q.multiSelect)}
+                >
+                  <strong>{option.label}</strong>
+                  {option.description && <span>{option.description}</span>}
+                </button>
+              );
+            })}
+          </div>
+          {(q.allowOther || q.options.length === 0) && (
+            <input
+              className="question-other"
+              value={other[q.id] ?? ""}
+              onChange={(event) => {
+                const value = event.target.value;
+                setOther((current) => ({ ...current, [q.id]: value }));
+                if (value && !q.multiSelect) setPicked((current) => ({ ...current, [q.id]: [] }));
+              }}
+              placeholder={q.options.length ? "其他回答…" : "输入你的回答…"}
+              maxLength={4000}
+            />
+          )}
+        </fieldset>
+      ))}
+      {error && <Notice>{error}</Notice>}
+      <div className="approval-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || expired}
+          onClick={() => void submit("deny")}
+        >
+          <X size={16} />
+          跳过
+        </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy || expired || !complete}
+          onClick={() => void submit("allow")}
+        >
+          <Check size={16} />
+          提交回答
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function ToolApprovalCard({ approval }: { approval: Approval }) {
+  const query = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [reason, setReason] = useState("");
+  const now = useCountdown();
   const expired = now >= approval.expiresAt;
   async function decide(decision: "allow" | "deny") {
     setBusy(true);

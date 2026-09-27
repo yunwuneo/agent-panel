@@ -38,8 +38,7 @@ export async function refresh(): Promise<AuthResult> {
           body: "{}",
           signal: AbortSignal.timeout(30_000),
         }).then(async (response) => {
-          if (!response.ok)
-            throw new ApiError(response.status, "登录已过期，请重新使用通行密钥登录。");
+          if (!response.ok) throw new ApiError(response.status, "登录已过期，请重新登录。");
           const data = (await response.json()) as AuthResult;
           accessToken = data.accessToken;
           return data;
@@ -126,6 +125,30 @@ export async function authenticate(
     challengeId: result.challengeId,
     response,
   });
+  accessToken = auth.accessToken;
+  return auth;
+}
+
+export async function passwordAuthenticate(
+  mode: "login" | "register" | "recovery",
+  email: string,
+  secret: string,
+  password: string,
+): Promise<AuthResult> {
+  const auth =
+    mode === "login"
+      ? await post<AuthResult>("/auth/password/login", { email, password })
+      : mode === "register"
+        ? await post<AuthResult>("/auth/password/register", {
+            email,
+            bootstrapToken: secret,
+            password,
+          })
+        : await post<AuthResult>("/auth/password/recover", {
+            email,
+            recoveryCode: secret,
+            password,
+          });
   accessToken = auth.accessToken;
   return auth;
 }

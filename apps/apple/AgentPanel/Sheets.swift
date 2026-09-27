@@ -119,6 +119,7 @@ struct PairingView: View {
 
 struct StatsView: View {
     @Bindable var model: AppModel
+    var embedded = false
     @Environment(\.dismiss) private var dismiss
     @State private var device = ""
     @State private var agent = ""
@@ -156,7 +157,8 @@ struct StatsView: View {
                     if let count = model.stats["unpricedSessions"].numberValue, count > 0 { Text("有 \(Int(count)) 个会话缺少价格，当前金额仅包含已知费用。").font(.caption).foregroundStyle(.orange) }
                 }.padding(28)
             }.background { PanelBackdrop() }
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .refreshable { await model.loadStats(device: device, agent: agent, project: project, days: days) }
+            .toolbar { if !embedded { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } } }
         }.frame(minWidth: 360, idealWidth: 760, minHeight: 570)
         .task { refresh() }.onChange(of: device) { refresh() }.onChange(of: agent) { refresh() }.onChange(of: days) { refresh() }
     }
@@ -167,6 +169,7 @@ struct StatsView: View {
 
 struct SettingsView: View {
     @Bindable var model: AppModel
+    var embedded = false
     @Environment(\.dismiss) private var dismiss
     @State private var enabled = true
     @State private var approvals = true
@@ -176,14 +179,50 @@ struct SettingsView: View {
     @State private var preview = false
     @State private var scopeDevice = ""
     @State private var scopeSession = ""
-    @State private var renameId = ""
-    @State private var rename = ""
-    @State private var revoke: APDevice?
+    @State private var relayDraft = ""
+    @State private var relayCheck: String?
+    @State private var switching = false
+    @State private var confirmLogout = false
     var body: some View {
         NavigationStack {
             Form {
-                Section("连接") { LabeledContent("Relay", value: model.relayURL); LabeledContent("账号", value: model.email) }
-                Section("费用") { NavigationLink("模型单价 · USD / 百万 Token") { ModelPricingView(model: model) } }
+                Section {
+                    LabeledContent("邮箱", value: model.email.isEmpty ? "—" : model.email)
+                    NavigationLink { PasswordSettingsView(model: model) } label: { LabeledContent("登录密码", value: model.passwordEnabled ? "已设置" : "未设置") }
+                } header: { Text("账号") }
+                Section {
+                    TextField("https://relay.example.com", text: $relayDraft)
+                        .textContentType(.URL)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                    LabeledContent("状态") {
+                        HStack(spacing: 6) { Circle().fill(model.isConnected ? .green : .orange).frame(width: 7, height: 7); Text(model.isConnected ? "已连接" : "正在重新连接") }
+                    }
+                    if let relayCheck { Text(relayCheck).font(.footnote).foregroundStyle(.secondary) }
+                    Button("检查连接") { Task { await check() } }.disabled(normalized(relayDraft).isEmpty)
+                    Button(switching ? "正在切换…" : "切换到此地址") { Task { switching = true; defer { switching = false }; if await model.switchRelay(to: relayDraft) { relayCheck = nil } } }
+                        .disabled(switching || normalized(relayDraft).isEmpty || normalized(relayDraft) == model.relayURL)
+                } header: { Text("后端服务（Relay）") } footer: {
+                    Text("每个地址的登录分别保存；切换到未登录过的地址会回到登录页，切回原地址无需重新登录。局域网地址可使用 HTTP，其他地址必须使用 HTTPS。")
+                }
+                Section("会话列表") {
+                    Picker("排序方式", selection: $model.sessionSort) { ForEach(SessionSort.allCases) { Text($0.label).tag($0) } }
+                }
+                Section {
+                    ForEach(model.devices, id: \.id) { device in
+                        NavigationLink { DeviceSettingsView(model: model, deviceId: device.id) } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) { Circle().fill(device.online ? .green : .secondary.opacity(0.4)).frame(width: 7, height: 7); Text(device.name) }
+                                let count = device.excludedProjects?.count ?? 0
+                                Text(count == 0 ? "未排除项目文件夹" : "已排除 \(count) 个项目文件夹").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    if model.devices.isEmpty { Text("还没有连接的设备").foregroundStyle(.secondary) }
+                } header: { Text("设备") } footer: { Text("可为每台设备设置排除的项目文件夹，这些会话不会出现在会话列表和统计中。") }
                 Section("通知偏好") {
                     Picker("设备范围", selection: $scopeDevice) { Text("全部设备").tag(""); ForEach(model.devices, id: \.id) { Text($0.name).tag($0.id) } }
                     Picker("会话范围", selection: $scopeSession) { Text("全部会话").tag(""); ForEach(model.sessions.filter { scopeDevice.isEmpty || $0.deviceId == scopeDevice }, id: \.id) { Text($0.title).tag($0.id) } }
@@ -191,22 +230,32 @@ struct SettingsView: View {
                     Button("允许系统通知") { Task { await model.perform { try await NotificationBridge.shared.requestPermission() } } }
                     Button("保存通知偏好") { saveNotifications() }
                 }
-                Section("设备") {
-                    ForEach(model.devices, id: \.id) { device in
-                        HStack { Text(device.name); Spacer(); Button("重命名") { renameId = device.id; rename = device.name }; Button("解绑", role: .destructive) { revoke = device } }
-                    }
-                    if !renameId.isEmpty { HStack { TextField("设备名称", text: $rename); Button("保存") { Task { await model.perform { _ = try await model.api.request("/api/devices/\(renameId)", method: "PATCH", body: .object(["name": .string(rename)])); renameId = ""; await model.reload() } } } } }
-                }
-                Section { Button("退出登录", role: .destructive) { Task { await model.logout(); dismiss() } } }
+                Section("费用") { NavigationLink("模型单价 · USD / 百万 Token") { ModelPricingView(model: model) } }
+                Section { Button("退出登录", role: .destructive) { confirmLogout = true } }
             }.formStyle(.grouped).navigationTitle("设置")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .toolbar { if !embedded { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } } }
+            .confirmationDialog("退出当前账号？", isPresented: $confirmLogout, titleVisibility: .visible) {
+                Button("退出登录", role: .destructive) { Task { await model.logout(); dismiss() } }
+            } message: { Text("此设备上该 Relay 的登录凭据会被删除。") }
         }.frame(minWidth: 360, idealWidth: 600, minHeight: 570)
-        .task { await loadNotifications() }
+        .task {
+            relayDraft = model.relayURL
+            if let status = try? await model.api.request("/api/auth/status", authenticated: false) { model.passwordEnabled = status["passwordEnabled"].boolValue ?? false }
+            await loadNotifications()
+        }
+        .onChange(of: model.relayURL) { _, value in relayDraft = value }
         .onChange(of: scopeDevice) { scopeSession = ""; Task { await loadNotifications() } }
         .onChange(of: scopeSession) { Task { await loadNotifications() } }
-        .confirmationDialog("解绑这台设备？它将立即断开连接，设备令牌也会失效。", isPresented: Binding(get: { revoke != nil }, set: { if !$0 { revoke = nil } })) {
-            Button("解绑设备", role: .destructive) { guard let device = revoke else { return }; Task { await model.perform { _ = try await model.api.request("/api/devices/\(device.id)", method: "DELETE"); await model.reload() }; revoke = nil } }
-        }
+    }
+    private func normalized(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+    private func check() async {
+        let probe = RelayClient()
+        probe.origin = normalized(relayDraft)
+        relayCheck = "正在检查…"
+        do {
+            let status = try await probe.request("/api/auth/status", authenticated: false)
+            relayCheck = status["registered"].boolValue == false ? "可以连接，该 Relay 尚未创建账号。" : "可以连接。"
+        } catch { relayCheck = "无法连接：\(error.localizedDescription)" }
     }
     func loadNotifications() async {
         do {
@@ -214,7 +263,7 @@ struct SettingsView: View {
             let settings = result["settings"].arrayValue ?? []
             let item = settings.first { ($0["deviceId"].stringValue ?? "") == scopeDevice && ($0["sessionId"].stringValue ?? "") == scopeSession } ?? .null
             enabled = item["enabled"].boolValue ?? true; approvals = item["approval"].boolValue ?? true; completed = item["completed"].boolValue ?? true; errors = item["error"].boolValue ?? true; waiting = item["waiting"].boolValue ?? true; preview = item["preview"].boolValue ?? false
-        } catch { model.error = error.localizedDescription }
+        } catch where !isCancellation(error) { model.error = error.localizedDescription } catch {}
     }
     func saveNotifications() {
         Task { await model.perform {
@@ -222,6 +271,135 @@ struct SettingsView: View {
             if !scopeDevice.isEmpty { values["deviceId"] = .string(scopeDevice) }; if !scopeSession.isEmpty { values["sessionId"] = .string(scopeSession) }
             _ = try await model.api.request("/api/push/settings", method: "PUT", body: .object(values))
         } }
+    }
+}
+
+struct PasswordSettingsView: View {
+    @Bindable var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var currentPassword = ""
+    @State private var newPassword = ""
+    @State private var confirmPassword = ""
+    var body: some View {
+        Form {
+            Section {
+                if model.passwordEnabled { SecureField("当前密码", text: $currentPassword).textContentType(.password) }
+                SecureField("新密码（至少 8 个字符）", text: $newPassword).textContentType(.newPassword)
+                SecureField("确认新密码", text: $confirmPassword).textContentType(.newPassword)
+                Button(model.passwordEnabled ? "更新密码" : "设置密码") { save() }.disabled(model.isBusy || newPassword.isEmpty)
+            } footer: { Text(model.passwordEnabled ? "更新后，其他已登录的客户端需要重新登录。" : "设置后可在无法使用通行密钥的设备上用密码登录。") }
+        }.formStyle(.grouped).navigationTitle(model.passwordEnabled ? "修改登录密码" : "设置登录密码")
+    }
+    func save() {
+        guard newPassword.count >= 8 else { model.error = "密码至少需要 8 个字符"; return }
+        guard newPassword == confirmPassword else { model.error = "两次输入的密码不一致"; return }
+        Task { if await model.changePassword(current: currentPassword, new: newPassword) { dismiss() } }
+    }
+}
+
+/// 单台设备的设置：名称、排除的项目文件夹、解绑。排除规则保存在 Relay，所有客户端和统计生效。
+struct DeviceSettingsView: View {
+    @Bindable var model: AppModel
+    let deviceId: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var newPath = ""
+    @State private var browsing = false
+    @State private var confirmRevoke = false
+    private var device: APDevice? { model.devices.first { $0.id == deviceId } }
+    private var excluded: [String] { device?.excludedProjects ?? [] }
+    /// 该设备最近会话涉及的项目，便于一键排除。
+    private var recentProjects: [String] {
+        var seen = Set(excluded)
+        return model.sessions.filter { $0.deviceId == deviceId }.sorted { $0.updatedAt > $1.updatedAt }.map(\.cwd).filter { seen.insert($0).inserted }.prefix(12).map { $0 }
+    }
+    var body: some View {
+        Form {
+            if let device {
+                Section("名称") {
+                    HStack { TextField("设备名称", text: $name); Button("保存") { Task { _ = await model.updateDevice(deviceId, name: name.trimmingCharacters(in: .whitespaces)) } }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || name == device.name || model.isBusy) }
+                    LabeledContent("系统", value: device.platform)
+                    if let hostname = device.hostname { LabeledContent("主机名", value: hostname) }
+                    LabeledContent("状态", value: device.online ? "在线" : "离线")
+                }
+                Section {
+                    ForEach(excluded, id: \.self) { path in
+                        Label { Text(path).font(.callout).lineLimit(2).truncationMode(.middle) } icon: { Image(systemName: "folder.badge.minus").foregroundStyle(.secondary) }
+                    }
+                    .onDelete { offsets in save(excluded.enumerated().filter { !offsets.contains($0.offset) }.map(\.element)) }
+                    HStack {
+                        TextField("绝对路径，例如 /Users/me/scratch", text: $newPath)
+                            .autocorrectionDisabled()
+                            #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                            #endif
+                            .onSubmit(addTyped)
+                        Button("添加", action: addTyped).disabled(newPath.trimmingCharacters(in: .whitespaces).isEmpty || model.isBusy)
+                    }
+                    Button { browsing = true } label: { Label("在设备上浏览…", systemImage: "folder") }.disabled(!device.online || !model.isConnected)
+                    if !recentProjects.isEmpty {
+                        Menu { ForEach(recentProjects, id: \.self) { path in Button(path) { save(excluded + [path]) } } } label: { Label("从最近的项目中选择", systemImage: "clock") }
+                    }
+                } header: { Text("排除的项目文件夹") } footer: {
+                    Text("这些文件夹及其子文件夹中的会话不会出现在会话列表和用量统计中。设备上的本地日志不受影响，删除规则后恢复显示。左滑可删除。")
+                }
+                Section { Button("解绑设备", role: .destructive) { confirmRevoke = true } } footer: { Text("解绑后设备立即断开，设备令牌失效，需要重新配对。") }
+            } else { ContentUnavailableView("设备已移除", systemImage: "desktopcomputer.trianglebadge.exclamationmark") }
+        }
+        .formStyle(.grouped).navigationTitle(device?.name ?? "设备")
+        .onAppear { name = device?.name ?? "" }
+        .sheet(isPresented: $browsing) { FolderPickerView(model: model, deviceId: deviceId) { path in save(excluded + [path]) } }
+        .confirmationDialog("解绑这台设备？它将立即断开连接，设备令牌也会失效。", isPresented: $confirmRevoke, titleVisibility: .visible) {
+            Button("解绑设备", role: .destructive) { Task { await model.perform { _ = try await model.api.request("/api/devices/\(deviceId)", method: "DELETE"); await model.reload() }; dismiss() } }
+        }
+    }
+    private func addTyped() {
+        let path = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return }
+        save(excluded + [path]); newPath = ""
+    }
+    private func save(_ paths: [String]) { Task { _ = await model.updateDevice(deviceId, excludedProjects: paths) } }
+}
+
+/// 通过 fs.listDir 浏览设备目录并选择一个文件夹。
+struct FolderPickerView: View {
+    let model: AppModel
+    let deviceId: String
+    let onPick: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var listing: APDirectoryListing?
+    @State private var loading = false
+    @State private var failure: String?
+    var body: some View {
+        NavigationStack {
+            List {
+                if let listing {
+                    Section { Text(listing.path.isEmpty ? "根目录" : listing.path).font(.footnote.monospaced()).foregroundStyle(.secondary).textSelection(.enabled) }
+                    Section {
+                        if let parent = listing.parent { Button { browse(parent) } label: { Label("上一级", systemImage: "arrow.up") } }
+                        ForEach(listing.entries, id: \.path) { entry in Button { browse(entry.path) } label: { Label(entry.name, systemImage: "folder") } }
+                    }
+                } else if loading { ProgressView() }
+                if let failure { Text(failure).foregroundStyle(.orange) }
+            }
+            .navigationTitle("选择要排除的文件夹")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("排除此文件夹") { if let path = listing?.path { onPick(path); dismiss() } }.disabled(listing?.path.isEmpty != false || loading) }
+            }
+        }.frame(minWidth: 340, idealWidth: 520, minHeight: 480)
+        .task { browse(nil) }
+    }
+    private func browse(_ path: String?) {
+        loading = true; failure = nil
+        Task {
+            defer { loading = false }
+            do { listing = try await model.command("fs.listDir", device: deviceId, payload: ["path": .string(path ?? "")], awaitResult: true).decoded(APDirectoryListing.self) }
+            catch { failure = error.localizedDescription }
+        }
     }
 }
 

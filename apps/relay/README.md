@@ -38,22 +38,26 @@ WebAuthn 强制验证 RP、origin、challenge、签名和 user verification。ac
 
 | 请求 | 正文或查询 | 返回 |
 | --- | --- | --- |
-| GET `/api/auth/status` | — | `{configured,registered,rpId}` |
+| GET `/api/auth/status` | — | `{configured,registered,passwordEnabled,rpId}`；registered 表示已有通行密钥或密码 |
 | POST `/api/auth/register/options` | `{email,bootstrapToken}` | `{challengeId,options}` |
 | POST `/api/auth/login/options` | `{email}` | `{challengeId,options}` |
 | POST `/api/auth/recovery/options` | `{email,recoveryCode}` | `{challengeId,options}`，后续走 register/verify |
 | POST `/api/auth/register/verify`、`login/verify` | `{challengeId,response,native?}`，response 为标准 WebAuthn JSON | `{accessToken,expiresIn,user,recoveryCodes?}`；native=true 另含 refreshToken |
+| POST `/api/auth/password/register` | `{email,bootstrapToken,password,native?}` | 同 register/verify；首次注册改用密码（8–256 字符，argon2id 哈希） |
+| POST `/api/auth/password/login` | `{email,password,native?}` | token 响应；password/* 每 IP 10 分钟内最多 10 次 |
+| POST `/api/auth/password/recover` | `{email,recoveryCode,password,native?}` | 重设密码、撤销全部登录会话并轮换恢复码；保留已有通行密钥 |
+| PUT `/api/auth/password` | `{currentPassword?,password}`，已设密码时必须提供当前密码 | `{ok:true}`；撤销当前会话以外的登录 |
 | POST `/api/auth/refresh` | Web `{}`；native `{refreshToken,native:true}` | 新的 token 响应 |
 | GET `/api/auth/me`；POST `/api/auth/logout` | — | `{user}`；`{ok:true}` |
 | POST `/api/pairing` | `{}` | `{code,expiresAt}`，5 分钟一次性代码 |
 | POST `/api/pairing/redeem` | `{code,name,platform,hostname?,agents?}` | `{deviceId,deviceToken}`，仅此时返回设备明文凭据 |
 | GET `/api/devices` | — | `{devices:Device[]}`，不含 token hash |
-| PATCH `/api/devices/:id`；DELETE 同路径 | `{name}`；— | `{device}`；`{ok:true}`，DELETE 立即断开设备连接 |
+| PATCH `/api/devices/:id`；DELETE 同路径 | `{name?, excludedProjects?}`（至少一项）；— | `{device}`；`{ok:true}`，DELETE 立即断开设备连接。`excludedProjects` 为绝对路径数组，匹配的文件夹及其子文件夹中的会话不出现在 `/api/sessions` 与 `/api/stats` |
 | GET `/api/sessions` | `deviceId?`、`agent?`、`project?` | `{sessions:Session[]}`，同一 nativeId 去重 |
 | GET `/api/sessions/:id/events` | `after=0&limit=500`，limit ≤ 1000 | `{events:Envelope[],nextSeq,hasMore,oldestSeq,truncated}` |
 | POST `/api/commands` | 协议 Envelope | `{commandId,status,sessionId?}` |
 | GET `/api/approvals` | `status=pending` 可选 | `{approvals:Approval[]}` |
-| POST `/api/approvals/:id/decision` | `{decision:"allow"|"deny",reason?}` | `{approval}`，支持离线 HTTP 审批 |
+| POST `/api/approvals/:id/decision` | `{decision:"allow"|"deny",reason?,answers?}` | `{approval}`，支持离线 HTTP 审批。带 `questions` 的提问类审批以 `allow` 提交 `answers`（问题 ID → 字符串数组，须覆盖全部问题），`deny` 表示跳过；审计只记录是否已回答，不记录答案正文 |
 | GET `/api/stats` | `deviceId?`、`agent?`、`project?`、`from?`、`to?`、`groupBy=day|device|agent|project` | `{sessions,usage,buckets,totals,groups,priceVersion,timeBasis}` |
 | GET `/api/audit` | — | 最新 500 条账号审计 |
 | POST `/api/ws-ticket` | `{}` | `{ticket,expiresAt}`，30 秒一次性 |

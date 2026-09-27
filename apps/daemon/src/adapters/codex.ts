@@ -3,6 +3,7 @@ import {
   type AgentCapability,
   combineModelUsage,
   modelParts,
+  type Question,
   type SessionEvent,
   type Usage,
 } from "@agentpanel/protocol";
@@ -314,12 +315,35 @@ export class CodexAdapter implements AgentAdapter {
       });
       this.rpc.respond(id, { action: "decline", content: null });
     } else if (method === "item/tool/requestUserInput") {
-      this.emit({
-        kind: "message.done",
-        role: "system",
-        text: `需要补充输入：${(p.questions ?? []).map((q: any) => q.question).join("\n")}。请继续发送消息回答。`,
-      });
-      this.rpc.respond(id, { answers: {} });
+      const questions = codexQuestions(p.questions);
+      // Secret answers (passwords, tokens) are never relayed; they stay a local-only interaction.
+      if (!questions) {
+        this.emit({
+          kind: "message.done",
+          role: "system",
+          text: `需要补充输入：${(p.questions ?? []).map((q: any) => q.question).join("\n")}。含敏感输入，请在设备本地完成或继续发送消息回答。`,
+        });
+        this.rpc.respond(id, { answers: {} });
+        return;
+      }
+      const response = await this.context.approve(
+        {
+          toolCallId: p.itemId,
+          toolName: "request_user_input",
+          input: jsonValue({ questions: p.questions }),
+          questions,
+        },
+        this.abort.signal,
+      );
+      const answers: Record<string, { answers: string[] }> = {};
+      if (response.decision === "allow")
+        for (const question of questions) {
+          const values = (response.answers?.[question.id] ?? [])
+            .map((v) => v.trim())
+            .filter(Boolean);
+          if (values.length) answers[question.id] = { answers: values };
+        }
+      this.rpc.respond(id, { answers });
     } else this.rpc.reject(id, `Unsupported server request: ${method}`);
   }
   async interrupt() {
@@ -333,6 +357,23 @@ export class CodexAdapter implements AgentAdapter {
     await this.rpc.close();
     this.running = false;
   }
+}
+
+/** request_user_input questions → normalized; undefined when empty or any question is secret. */
+export function codexQuestions(raw: unknown): Question[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  if (raw.some((q: any) => q?.isSecret === true || typeof q?.id !== "string")) return undefined;
+  return raw.map((q: any) => ({
+    id: q.id,
+    header: typeof q.header === "string" ? q.header : undefined,
+    question: String(q.question ?? ""),
+    options: (Array.isArray(q.options) ? q.options : []).map((o: any) => ({
+      label: String(o?.label ?? ""),
+      ...(typeof o?.description === "string" ? { description: o.description } : {}),
+    })),
+    // Codex accepts free text when there are no options or the question opts in.
+    allowOther: q.isOther === true || !Array.isArray(q.options) || q.options.length === 0,
+  }));
 }
 
 export async function probeCodex(config: Config): Promise<AgentCapability> {

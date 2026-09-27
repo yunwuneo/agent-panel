@@ -31,6 +31,7 @@ export const unauthorized = () => new ApiError(401, "UNAUTHORIZED", "请重新�
 
 export interface User extends RecordData {
   email: string;
+  passwordHash?: string;
 }
 interface Credential extends RecordData {
   publicKey: string;
@@ -97,11 +98,18 @@ export class AuthService {
     });
   }
   async status() {
+    const user = await this.store.get<User>("users", this.ownerId, this.ownerId);
     return {
       configured: true,
-      registered: (await this.store.list("credentials", this.ownerId)).length > 0,
+      registered: await this.registered(this.store),
+      passwordEnabled: !!user?.passwordHash,
       rpId: this.config.rpId,
     };
+  }
+  /** The owner counts as registered once any sign-in method exists: a passkey or a password. */
+  private async registered(tx: Store) {
+    if ((await tx.list("credentials", this.ownerId)).length) return true;
+    return !!(await tx.get<User>("users", this.ownerId, this.ownerId))?.passwordHash;
   }
   private validateEmail(email: string) {
     if (!secretEqual(email.toLowerCase().trim(), this.config.ownerEmail))
@@ -111,8 +119,8 @@ export class AuthService {
     this.validateEmail(email);
     if (!secretEqual(bootstrapToken, this.config.bootstrapToken))
       throw new ApiError(401, "AUTH_FAILED", "账号或凭据无效");
-    if ((await this.store.list("credentials", this.ownerId)).length)
-      throw new ApiError(409, "ALREADY_REGISTERED", "账号已注册，请使用 Passkey 登录");
+    if (await this.registered(this.store))
+      throw new ApiError(409, "ALREADY_REGISTERED", "账号已注册，请直接登录");
     return this.newRegistrationChallenge("register");
   }
   private async newRegistrationChallenge(mode: "register" | "recover", recoveryHash?: string) {
@@ -150,7 +158,7 @@ export class AuthService {
     return this.store.atomic(`auth:${this.ownerId}`, async (tx) => {
       const challenge = await this.challenge(tx, challengeId);
       if (challenge.mode === "login") throw unauthorized();
-      if (challenge.mode === "register" && (await tx.list("credentials", this.ownerId)).length)
+      if (challenge.mode === "register" && (await this.registered(tx)))
         throw new ApiError(409, "ALREADY_REGISTERED", "账号已注册");
       if (
         challenge.mode === "recover" &&
@@ -187,19 +195,89 @@ export class AuthService {
         transports: credential.transports ?? [],
       });
       await tx.remove("challenges", challengeId);
-      for (const old of await tx.list("recovery_codes", this.ownerId))
-        await tx.remove("recovery_codes", old.id);
-      const recoveryCodes = Array.from({ length: 8 }, () =>
-        randomBytes(12).toString("hex").toUpperCase(),
-      );
-      for (const code of recoveryCodes)
-        await tx.put("recovery_codes", {
-          id: digest(code),
-          owner: this.ownerId,
-          createdAt: Date.now(),
-        });
+      const recoveryCodes = await this.replaceRecoveryCodes(tx);
       await this.audit(tx, "auth.register", { recovered: challenge.mode === "recover" });
       return { ...(await this.createSession(tx)), recoveryCodes };
+    });
+  }
+  private async replaceRecoveryCodes(tx: Store) {
+    for (const old of await tx.list("recovery_codes", this.ownerId))
+      await tx.remove("recovery_codes", old.id);
+    const recoveryCodes = Array.from({ length: 8 }, () =>
+      randomBytes(12).toString("hex").toUpperCase(),
+    );
+    for (const code of recoveryCodes)
+      await tx.put("recovery_codes", {
+        id: digest(code),
+        owner: this.ownerId,
+        createdAt: Date.now(),
+      });
+    return recoveryCodes;
+  }
+  private hashPassword(password: string) {
+    return Bun.password.hash(password, { algorithm: "argon2id" });
+  }
+  /** First-time registration with the bootstrap token and a password instead of a passkey. */
+  async passwordRegister(email: string, bootstrapToken: string, password: string): Promise<Tokens> {
+    this.validateEmail(email);
+    if (!secretEqual(bootstrapToken, this.config.bootstrapToken))
+      throw new ApiError(401, "AUTH_FAILED", "账号或凭据无效");
+    const passwordHash = await this.hashPassword(password);
+    return this.store.atomic(`auth:${this.ownerId}`, async (tx) => {
+      if (await this.registered(tx))
+        throw new ApiError(409, "ALREADY_REGISTERED", "账号已注册，请直接登录");
+      const user = await tx.get<User>("users", this.ownerId, this.ownerId);
+      await tx.put("users", { ...user!, passwordHash });
+      const recoveryCodes = await this.replaceRecoveryCodes(tx);
+      await this.audit(tx, "auth.register", { method: "password" });
+      return { ...(await this.createSession(tx)), recoveryCodes };
+    });
+  }
+  async passwordLogin(email: string, password: string): Promise<Tokens> {
+    this.validateEmail(email);
+    const user = await this.store.get<User>("users", this.ownerId, this.ownerId);
+    if (!user?.passwordHash || !(await Bun.password.verify(password, user.passwordHash))) {
+      await this.audit(this.store, "auth.password_failed", {});
+      throw new ApiError(401, "AUTH_FAILED", "账号或密码错误");
+    }
+    return this.store.atomic(`auth:${this.ownerId}`, async (tx) => {
+      await this.audit(tx, "auth.login", { method: "password" });
+      return this.createSession(tx);
+    });
+  }
+  /** A recovery code resets the password and, like passkey recovery, signs out every session. */
+  async passwordRecover(email: string, recoveryCode: string, password: string): Promise<Tokens> {
+    this.validateEmail(email);
+    const hash = digest(recoveryCode.replace(/[\s-]/g, "").toUpperCase());
+    const passwordHash = await this.hashPassword(password);
+    return this.store.atomic(`auth:${this.ownerId}`, async (tx) => {
+      if (!(await tx.get("recovery_codes", hash, this.ownerId)))
+        throw new ApiError(401, "AUTH_FAILED", "账号或恢复码无效");
+      const user = await tx.get<User>("users", this.ownerId, this.ownerId);
+      await tx.put("users", { ...user!, passwordHash });
+      for (const session of await tx.list("auth_sessions", this.ownerId))
+        await tx.put("auth_sessions", { ...session, revokedAt: Date.now() });
+      const recoveryCodes = await this.replaceRecoveryCodes(tx);
+      await this.audit(tx, "auth.password_reset", { recovered: true });
+      return { ...(await this.createSession(tx)), recoveryCodes };
+    });
+  }
+  /** Sets or changes the password of a signed-in owner; other sessions are signed out. */
+  async setPassword(principal: Principal, currentPassword: string | undefined, password: string) {
+    const passwordHash = await this.hashPassword(password);
+    await this.store.atomic(`auth:${principal.owner}`, async (tx) => {
+      const user = await tx.get<User>("users", principal.owner, principal.owner);
+      if (!user) throw unauthorized();
+      if (
+        user.passwordHash &&
+        !(currentPassword && (await Bun.password.verify(currentPassword, user.passwordHash)))
+      )
+        throw new ApiError(400, "PASSWORD_INVALID", "当前密码错误");
+      await tx.put("users", { ...user, passwordHash });
+      for (const session of await tx.list<AuthSession>("auth_sessions", principal.owner))
+        if (session.id !== principal.sessionId && !session.revokedAt)
+          await tx.put("auth_sessions", { ...session, revokedAt: Date.now() });
+      await this.audit(tx, "auth.password_set", { changed: !!user.passwordHash }, principal.owner);
     });
   }
   async loginOptions(email: string) {

@@ -1,4 +1,4 @@
-import type { Approval, Json } from "@agentpanel/protocol";
+import type { Approval, Json, Question } from "@agentpanel/protocol";
 import type { ApprovalDecision } from "./adapters/types";
 
 type Pending = { approval: Approval; settle: (decision: ApprovalDecision) => void };
@@ -11,7 +11,13 @@ export class ApprovalBroker {
   request(
     deviceId: string,
     sessionId: string,
-    tool: { toolName: string; input: Json; toolCallId?: string; reason?: string },
+    tool: {
+      toolName: string;
+      input: Json;
+      toolCallId?: string;
+      reason?: string;
+      questions?: Question[];
+    },
     signal?: AbortSignal,
   ): Promise<ApprovalDecision> {
     if (Buffer.byteLength(JSON.stringify(tool.input)) > 512 * 1024)

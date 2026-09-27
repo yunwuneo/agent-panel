@@ -530,3 +530,132 @@ test("APNs selects each platform topic and only falls back to an explicit shared
   expect(apnsTopicFor({ ...config, apnsIosTopic: "dev.test.ios" }, "macos")).toBeUndefined();
   expect(apnsTopicFor(settings, "web")).toBeUndefined();
 });
+
+describe("password sign-in", () => {
+  const password = "correct horse battery";
+  const post = (
+    relay: ReturnType<typeof createRelay>,
+    path: string,
+    data: unknown,
+    remote = "10.0.0.1",
+  ) =>
+    relay.app.request(
+      path,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: config.origin },
+        body: JSON.stringify(data),
+      },
+      { remoteAddress: remote } as never,
+    );
+  test("bootstrap with a password registers the owner once and allows password login", async () => {
+    const relay = createRelay(new MemoryStore(), config);
+    await relay.initialize();
+    await expect(relay.auth.passwordRegister(config.ownerEmail, "bad", password)).rejects.toThrow();
+    const registered = await relay.auth.passwordRegister(
+      config.ownerEmail,
+      config.bootstrapToken,
+      password,
+    );
+    expect(registered.recoveryCodes?.length).toBe(8);
+    expect(await relay.auth.status()).toMatchObject({ registered: true, passwordEnabled: true });
+    await expect(
+      relay.auth.passwordRegister(config.ownerEmail, config.bootstrapToken, password),
+    ).rejects.toThrow("已注册");
+    await expect(
+      relay.auth.registrationOptions(config.ownerEmail, config.bootstrapToken),
+    ).rejects.toThrow("已注册");
+    await expect(relay.auth.passwordLogin(config.ownerEmail, "wrong password")).rejects.toThrow(
+      "密码",
+    );
+    await expect(relay.auth.passwordLogin("other@example.invalid", password)).rejects.toThrow();
+    const login = await relay.auth.passwordLogin(config.ownerEmail, password);
+    expect((await relay.auth.authenticate(login.accessToken)).role).toBe("client");
+    const stored = await relay.auth.store.get("users", relay.auth.ownerId, relay.auth.ownerId);
+    expect(String(stored?.passwordHash)).toStartWith("$argon2id$");
+  });
+  test("passkey owner sets and changes a password; other sessions are signed out", async () => {
+    const relay = await setup(new MemoryStore());
+    expect((await relay.auth.status()).passwordEnabled).toBe(false);
+    await expect(relay.auth.passwordLogin(config.ownerEmail, password)).rejects.toThrow();
+    const other = await relay.auth.refresh(relay.credentials.refreshToken);
+    const current = await relay.auth.authenticate(other.accessToken);
+    expect(
+      (await relay.request("/api/auth/password", { password: "short" }, "PUT", other.accessToken))
+        .status,
+    ).toBe(400);
+    expect(
+      (await relay.request("/api/auth/password", { password }, "PUT", other.accessToken)).status,
+    ).toBe(200);
+    const first = await relay.auth.passwordLogin(config.ownerEmail, password);
+    await expect(
+      relay.auth.setPassword(current, "wrong password", "another password"),
+    ).rejects.toThrow("当前密码");
+    await relay.auth.setPassword(current, password, "another password");
+    await expect(relay.auth.authenticate(first.accessToken)).rejects.toThrow();
+    expect((await relay.auth.authenticate(other.accessToken)).role).toBe("client");
+    await expect(relay.auth.passwordLogin(config.ownerEmail, password)).rejects.toThrow();
+    await relay.auth.passwordLogin(config.ownerEmail, "another password");
+  });
+  test("recovery code resets the password, revokes sessions and rotates codes", async () => {
+    const relay = createRelay(new MemoryStore(), config);
+    await relay.initialize();
+    const registered = await relay.auth.passwordRegister(
+      config.ownerEmail,
+      config.bootstrapToken,
+      password,
+    );
+    const code = registered.recoveryCodes![0]!;
+    const recovered = await relay.auth.passwordRecover(
+      config.ownerEmail,
+      code,
+      "brand new password",
+    );
+    await expect(relay.auth.authenticate(registered.accessToken)).rejects.toThrow();
+    await expect(relay.auth.passwordRecover(config.ownerEmail, code, password)).rejects.toThrow();
+    expect(recovered.recoveryCodes?.length).toBe(8);
+    await relay.auth.passwordLogin(config.ownerEmail, "brand new password");
+  });
+  test("HTTP password login is public, sets the refresh cookie and is rate limited", async () => {
+    const relay = createRelay(new MemoryStore(), config);
+    await relay.initialize();
+    await relay.auth.passwordRegister(config.ownerEmail, config.bootstrapToken, password);
+    const ok = await post(relay, "/api/auth/password/login", {
+      email: config.ownerEmail,
+      password,
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("set-cookie")).toContain("ap_refresh=");
+    expect(((await ok.json()) as Record<string, unknown>).refreshToken).toBeUndefined();
+    const native = await post(
+      relay,
+      "/api/auth/password/login",
+      { email: config.ownerEmail, password, native: true },
+      "10.0.0.2",
+    );
+    expect(((await native.json()) as Record<string, unknown>).refreshToken).toBeString();
+    const statuses: number[] = [];
+    for (let i = 0; i < 10; i++)
+      statuses.push(
+        (
+          await post(
+            relay,
+            "/api/auth/password/login",
+            { email: config.ownerEmail, password: "wrong" },
+            "10.0.0.3",
+          )
+        ).status,
+      );
+    expect(statuses.every((s) => s === 401)).toBe(true);
+    expect(
+      (
+        await post(
+          relay,
+          "/api/auth/password/login",
+          { email: config.ownerEmail, password },
+          "10.0.0.3",
+        )
+      ).status,
+    ).toBe(429);
+  });
+});

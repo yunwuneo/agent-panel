@@ -58,8 +58,20 @@ export const DeviceSchema = z.object({
   online: z.boolean(),
   agents: z.array(AgentCapabilitySchema),
   lastSeen: Timestamp,
+  /** Owner-configured project folders hidden from session lists and stats; stored by the Relay. */
+  excludedProjects: z.array(z.string().min(1).max(4096)).max(200).optional(),
 });
 export type Device = z.infer<typeof DeviceSchema>;
+const normalizedPath = (path: string) => path.replaceAll("\\", "/").replace(/\/+$/, "");
+/** True when `cwd` is one of `excluded` or lies beneath it (path-segment boundary, not string prefix). */
+export function isExcludedProject(cwd: string, excluded: readonly string[] | undefined) {
+  if (!excluded?.length) return false;
+  const path = normalizedPath(cwd);
+  return excluded.some((entry) => {
+    const root = normalizedPath(entry);
+    return root !== "" && (path === root || path.startsWith(`${root}/`));
+  });
+}
 export const TokenCountsSchema = z.object({
   // All input tokens, including the separately reported cached reads/writes.
   inputTokens: z.number().nonnegative(),
@@ -154,6 +166,24 @@ export const SessionEventSchema = z.object({
   model: z.string().optional(),
 });
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
+export const QuestionOptionSchema = z.object({
+  label: z.string().max(500),
+  description: z.string().max(2000).optional(),
+});
+/** A question an agent asks (Claude AskUserQuestion / Codex request_user_input), normalized. */
+export const QuestionSchema = z.object({
+  id: z.string().min(1).max(2000),
+  header: z.string().max(200).optional(),
+  question: z.string().max(4000),
+  options: z.array(QuestionOptionSchema).max(20),
+  multiSelect: z.boolean().optional(),
+  /** Whether a free-text answer outside `options` is accepted. */
+  allowOther: z.boolean().optional(),
+});
+export type Question = z.infer<typeof QuestionSchema>;
+/** question id → chosen option labels and/or free text. */
+export const AnswersSchema = z.record(z.string().max(2000), z.array(z.string().max(4000)).max(20));
+export type Answers = z.infer<typeof AnswersSchema>;
 export const ApprovalSchema = z.object({
   id: Id,
   deviceId: Id,
@@ -165,8 +195,11 @@ export const ApprovalSchema = z.object({
   expiresAt: Timestamp,
   status: z.enum(["pending", "allowed", "denied", "expired"]),
   reason: z.string().optional(),
+  /** Present when the agent asks the user to answer questions rather than approve a tool call. */
+  questions: z.array(QuestionSchema).min(1).max(8).optional(),
 });
 export type Approval = z.infer<typeof ApprovalSchema>;
+
 export const DirectoryEntrySchema = z.object({ name: z.string(), path: z.string() });
 export const DirectoryListingSchema = z.object({
   path: z.string(),
@@ -242,6 +275,8 @@ export const payloadSchemas = {
     approvalId: Id,
     decision: z.enum(["allow", "deny"]),
     reason: z.string().max(2000).optional(),
+    /** Answers for an approval carrying `questions`; "allow" submits them, "deny" skips. */
+    answers: AnswersSchema.optional(),
   }),
   "fs.listDir": z.object({ path: z.string() }),
   "stats.query": StatsQuerySchema,
@@ -412,6 +447,8 @@ export const namedSchemas = {
   APSession: SessionSchema,
   APError: ErrorSchema,
   APSessionEvent: SessionEventSchema,
+  APQuestionOption: QuestionOptionSchema,
+  APQuestion: QuestionSchema,
   APApproval: ApprovalSchema,
   APDirectoryEntry: DirectoryEntrySchema,
   APDirectoryListing: DirectoryListingSchema,

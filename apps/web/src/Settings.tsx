@@ -4,6 +4,7 @@ import {
   Bell,
   Check,
   Fingerprint,
+  KeyRound,
   Laptop,
   LogOut,
   Moon,
@@ -232,7 +233,7 @@ export default function Settings({
             <Fingerprint size={20} />
             <div>
               <h2>你的账号</h2>
-              <p>通行密钥，让安全变得简单。</p>
+              <p>通行密钥或密码，选择顺手的方式登录。</p>
             </div>
           </div>
           <div className="account-row">
@@ -241,12 +242,13 @@ export default function Settings({
               <strong>{user.email}</strong>
               <small>
                 <ShieldCheck size={12} />
-                通过通行密钥保护
+                通过通行密钥或密码保护
               </small>
             </div>
           </div>
+          <PasswordForm onNotify={onNotify} />
           <p className="muted small-text">
-            恢复码可在无法使用通行密钥时重设登录凭据。请在安全的位置离线保存。
+            恢复码可在无法登录时重设通行密钥或密码。请在安全的位置离线保存。
           </p>
           <button type="button" className="secondary" onClick={onLogout}>
             <LogOut size={16} />
@@ -359,5 +361,93 @@ export default function Settings({
         <small>会话事件默认保存 30 天 · 审批审计 180 天 · 用量汇总长期保存</small>
       </div>
     </>
+  );
+}
+
+function PasswordForm({ onNotify }: { onNotify: (message: string) => void }) {
+  const query = useQueryClient();
+  const status = useQuery({
+    queryKey: ["auth-status"],
+    queryFn: () => api<{ passwordEnabled: boolean }>("/auth/status"),
+  });
+  const [current, setCurrent] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const enabled = status.data?.passwordEnabled ?? false;
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setError("");
+    if (password !== confirm) {
+      setError("两次输入的密码不一致");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api("/auth/password", {
+        method: "PUT",
+        body: JSON.stringify({ ...(enabled ? { currentPassword: current } : {}), password }),
+      });
+      setCurrent("");
+      setPassword("");
+      setConfirm("");
+      await query.invalidateQueries({ queryKey: ["auth-status"] });
+      onNotify(enabled ? "密码已更新，其他登录已退出" : "已设置登录密码");
+    } catch (error) {
+      setError(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (status.isPending) return <Spinner label="正在读取账号状态" />;
+  return (
+    <form className="password-form" onSubmit={submit}>
+      <span className="field-label">{enabled ? "修改登录密码" : "设置登录密码"}</span>
+      <input type="text" name="username" autoComplete="username" hidden readOnly />
+      {enabled && (
+        <label className="field">
+          当前密码
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={current}
+            onChange={(event) => setCurrent(event.target.value)}
+            required
+            disabled={busy}
+          />
+        </label>
+      )}
+      <label className="field">
+        新密码
+        <input
+          type="password"
+          autoComplete="new-password"
+          placeholder="至少 8 个字符"
+          minLength={8}
+          maxLength={256}
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+          disabled={busy}
+        />
+      </label>
+      <label className="field">
+        确认新密码
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={confirm}
+          onChange={(event) => setConfirm(event.target.value)}
+          required
+          disabled={busy}
+        />
+      </label>
+      {error && <Notice>{error}</Notice>}
+      <button type="submit" className="secondary" disabled={busy}>
+        <KeyRound size={16} />
+        {busy ? "正在保存" : enabled ? "更新密码" : "设置密码"}
+      </button>
+    </form>
   );
 }

@@ -1,12 +1,14 @@
 import type {
   AgentCapability,
+  Answers,
   Json,
   PermissionMode,
+  Question,
   SessionEvent,
   Usage,
 } from "@agentpanel/protocol";
 
-export type ApprovalDecision = { decision: "allow" | "deny"; reason?: string };
+export type ApprovalDecision = { decision: "allow" | "deny"; reason?: string; answers?: Answers };
 export type AdapterContext = {
   cwd: string;
   nativeId?: string;
@@ -15,7 +17,13 @@ export type AdapterContext = {
   usage?: Usage;
   emit(event: SessionEvent): void;
   approve(
-    tool: { toolName: string; input: Json; toolCallId?: string; reason?: string },
+    tool: {
+      toolName: string;
+      input: Json;
+      toolCallId?: string;
+      reason?: string;
+      questions?: Question[];
+    },
     signal?: AbortSignal,
   ): Promise<ApprovalDecision>;
 };

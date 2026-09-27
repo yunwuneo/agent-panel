@@ -9,7 +9,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useState } from "react";
-import { api, authenticate, errorText, type User } from "./api";
+import { api, authenticate, errorText, passwordAuthenticate, type User } from "./api";
 import { Brand, Modal, Notice, Spinner } from "./ui";
 
 export default function Auth({
@@ -19,20 +19,37 @@ export default function Auth({
 }) {
   const status = useQuery({
     queryKey: ["auth-status"],
-    queryFn: () => api<{ configured: boolean; registered: boolean; rpId: string }>("/auth/status"),
+    queryFn: () =>
+      api<{ configured: boolean; registered: boolean; passwordEnabled: boolean; rpId: string }>(
+        "/auth/status",
+      ),
   });
   const [recovery, setRecovery] = useState(false);
+  const [method, setMethod] = useState<"passkey" | "password">();
   const [email, setEmail] = useState("");
   const [secret, setSecret] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const mode = recovery ? "recovery" : status.data?.registered ? "login" : "register";
+  // Offer the password first when it is the only method the owner set up.
+  const usePassword =
+    (method ?? (status.data?.passwordEnabled && mode === "login" ? "password" : "passkey")) ===
+    "password";
+  const newPassword = usePassword && mode !== "login";
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
+    if (newPassword && password !== confirm) {
+      setError("两次输入的密码不一致");
+      return;
+    }
     setBusy(true);
     try {
-      const result = await authenticate(mode, email.trim(), secret.trim());
+      const result = usePassword
+        ? await passwordAuthenticate(mode, email.trim(), secret.trim(), password)
+        : await authenticate(mode, email.trim(), secret.trim());
       onLogin(result.user, result.recoveryCodes);
     } catch (error) {
       setError(errorText(error));
@@ -96,10 +113,16 @@ export default function Auth({
           </h2>
           <p className="muted">
             {mode === "recovery"
-              ? "使用恢复码验证身份，并创建新的通行密钥。"
+              ? usePassword
+                ? "使用恢复码验证身份，并设置新的登录密码。"
+                : "使用恢复码验证身份，并创建新的通行密钥。"
               : mode === "register"
-                ? "创建你的专属账号，使用通行密钥安全登录。"
-                : "使用通行密钥，轻松回到你的工作空间。"}
+                ? usePassword
+                  ? "创建你的专属账号，使用密码登录。"
+                  : "创建你的专属账号，使用通行密钥安全登录。"
+                : usePassword
+                  ? "输入账号密码，回到你的工作空间。"
+                  : "使用通行密钥，轻松回到你的工作空间。"}
           </p>
           {status.isPending ? (
             <Spinner label="正在连接工作空间" />
@@ -111,12 +134,35 @@ export default function Auth({
             </Notice>
           ) : (
             <form onSubmit={submit}>
+              <div className="segmented auth-method" role="tablist">
+                {(
+                  [
+                    ["passkey", "通行密钥"],
+                    ["password", "密码"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="tab"
+                    aria-selected={(id === "password") === usePassword}
+                    className={(id === "password") === usePassword ? "active" : ""}
+                    onClick={() => {
+                      setMethod(id);
+                      setError("");
+                    }}
+                    disabled={busy}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <label className="field">
                 邮箱
                 <input
                   name="email"
                   type="email"
-                  autoComplete="username webauthn"
+                  autoComplete={usePassword ? "username" : "username webauthn"}
                   placeholder="you@example.com"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
@@ -140,18 +186,54 @@ export default function Auth({
                   />
                 </label>
               )}
+              {usePassword && (
+                <label className="field">
+                  {newPassword ? "新密码" : "密码"}
+                  <input
+                    name="password"
+                    type="password"
+                    autoComplete={newPassword ? "new-password" : "current-password"}
+                    placeholder={newPassword ? "至少 8 个字符" : "输入账号密码"}
+                    minLength={newPassword ? 8 : undefined}
+                    maxLength={256}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    required
+                    disabled={busy}
+                  />
+                </label>
+              )}
+              {newPassword && (
+                <label className="field">
+                  确认新密码
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={confirm}
+                    onChange={(event) => setConfirm(event.target.value)}
+                    required
+                    disabled={busy}
+                  />
+                </label>
+              )}
               {error && <Notice>{error}</Notice>}
               <button className="primary auth-submit" type="submit" disabled={busy}>
                 {busy ? (
-                  <Spinner label="请在系统窗口中完成验证" />
+                  <Spinner label={usePassword ? "正在验证" : "请在系统窗口中完成验证"} />
                 ) : (
                   <>
-                    <Fingerprint size={19} />
-                    {mode === "login"
-                      ? "使用通行密钥登录"
-                      : mode === "register"
-                        ? "创建通行密钥"
-                        : "验证并重设通行密钥"}
+                    {usePassword ? <KeyRound size={19} /> : <Fingerprint size={19} />}
+                    {usePassword
+                      ? mode === "login"
+                        ? "登录"
+                        : mode === "register"
+                          ? "创建账号"
+                          : "验证并重设密码"
+                      : mode === "login"
+                        ? "使用通行密钥登录"
+                        : mode === "register"
+                          ? "创建通行密钥"
+                          : "验证并重设通行密钥"}
                     <ArrowRight size={17} />
                   </>
                 )}
@@ -163,6 +245,8 @@ export default function Auth({
                   onClick={() => {
                     setRecovery(!recovery);
                     setSecret("");
+                    setPassword("");
+                    setConfirm("");
                     setError("");
                   }}
                   disabled={busy}
@@ -172,6 +256,8 @@ export default function Auth({
                       <ArrowLeft size={14} />
                       返回登录
                     </>
+                  ) : usePassword ? (
+                    "忘记密码？"
                   ) : (
                     "无法使用通行密钥？"
                   )}
@@ -181,7 +267,11 @@ export default function Auth({
           )}
           <div className="auth-security">
             <ShieldCheck size={15} />
-            <span>由设备上的 Face ID、Touch ID 或安全密钥保护</span>
+            <span>
+              {usePassword
+                ? "密码仅以加盐哈希保存，多次失败将暂时限制尝试"
+                : "由设备上的 Face ID、Touch ID 或安全密钥保护"}
+            </span>
           </div>
         </section>
       </main>
@@ -210,7 +300,7 @@ export function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () =
   return (
     <Modal title="保管好你的备用钥匙" eyebrow="RECOVERY CODES">
       <p className="muted">
-        通行密钥已就绪。恢复码仅在此显示一次，每个只能使用一次。请保存在安全的位置，以便无法使用通行密钥时找回账号。
+        登录凭据已就绪。恢复码仅在此显示一次，每个只能使用一次。请保存在安全的位置，以便无法登录时找回账号。
       </p>
       <div className="recovery-codes">
         {codes.map((code) => (

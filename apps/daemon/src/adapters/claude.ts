@@ -1,8 +1,40 @@
-import type { AgentCapability, SessionEvent, Usage } from "@agentpanel/protocol";
+import type { AgentCapability, Answers, Question, SessionEvent, Usage } from "@agentpanel/protocol";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Config } from "../config";
 import { claudeUsage, emptyUsage, mergeUsage } from "../indexer";
 import { type AdapterContext, type AgentAdapter, jsonValue } from "./types";
+
+/** AskUserQuestion input → normalized questions; the question text doubles as its id, as the SDK keys answers by it. */
+export function askUserQuestions(input: Record<string, unknown>): Question[] | undefined {
+  const raw = Array.isArray(input.questions) ? input.questions : [];
+  const questions = raw
+    .filter((q): q is Record<string, any> => !!q && typeof q.question === "string")
+    .map((q) => ({
+      id: q.question as string,
+      header: typeof q.header === "string" ? q.header : undefined,
+      question: q.question as string,
+      options: (Array.isArray(q.options) ? q.options : [])
+        .filter((o: any) => typeof o?.label === "string")
+        .map((o: any) => ({
+          label: o.label as string,
+          ...(typeof o.description === "string" ? { description: o.description } : {}),
+        })),
+      multiSelect: q.multiSelect === true,
+      allowOther: true,
+    }));
+  return questions.length ? questions : undefined;
+}
+/** SDK format: question text → answer; multiple selections are comma-separated. Undefined unless every question is answered. */
+export function claudeAnswers(questions: Question[], answers: Answers | undefined) {
+  if (!answers) return undefined;
+  const result: Record<string, string> = {};
+  for (const question of questions) {
+    const values = (answers[question.id] ?? []).map((v) => v.trim()).filter(Boolean);
+    if (!values.length) return undefined;
+    result[question.question] = values.join(", ");
+  }
+  return result;
+}
 
 type QueryStream = AsyncIterable<any> & { interrupt(): Promise<unknown>; close(): void };
 type QueryFactory = (args: { prompt: string; options: Record<string, any> }) => QueryStream;
@@ -85,15 +117,27 @@ export class ClaudeAdapter implements AgentAdapter {
         input: Record<string, unknown>,
         options: { signal: AbortSignal; toolUseID?: string; decisionReason?: string },
       ) => {
+        const questions = toolName === "AskUserQuestion" ? askUserQuestions(input) : undefined;
         const decision = await context.approve(
           {
             toolName,
             input: jsonValue(input),
             toolCallId: options.toolUseID,
             reason: options.decisionReason,
+            ...(questions ? { questions } : {}),
           },
           options.signal,
         );
+        if (questions) {
+          const answers = claudeAnswers(questions, decision.answers);
+          return decision.decision === "allow" && answers
+            ? { behavior: "allow", updatedInput: { ...input, answers } }
+            : {
+                behavior: "deny",
+                message:
+                  decision.reason ?? "用户未回答这些问题，请不要重复提问，按你的判断继续或结束。",
+              };
+        }
         return decision.decision === "allow"
           ? { behavior: "allow", updatedInput: input }
           : { behavior: "deny", message: decision.reason ?? "用户拒绝了本次操作" };

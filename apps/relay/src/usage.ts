@@ -2,6 +2,7 @@ import {
   addUsage,
   combineModelUsage,
   emptyUsage,
+  isExcludedProject,
   isQuotaProbe,
   type Session,
   type Usage,
@@ -252,10 +253,17 @@ export async function queryStats(
         sessionKey: row.id,
         legacyUsage: row.usage,
       });
+  const excluded = new Map(
+    (await tx.list<RecordData & { excludedProjects?: string[] }>("devices", owner)).map((d) => [
+      d.id,
+      d.excludedProjects,
+    ]),
+  );
   const rows = daily.filter(
     (row) =>
       !row.excludedReason &&
       !isQuotaProbe({ agent: row.agent, cwd: row.project, source: row.source }) &&
+      !isExcludedProject(row.project, excluded.get(row.deviceId)) &&
       (!filter.deviceId || row.deviceId === filter.deviceId) &&
       (!filter.agent || row.agent === filter.agent) &&
       (!filter.project || row.project === filter.project) &&

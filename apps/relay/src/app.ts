@@ -1,5 +1,11 @@
 import { resolve } from "node:path";
-import { AgentCapabilitySchema, ModelPriceSchema, parseEnvelope } from "@agentpanel/protocol";
+import {
+  AgentCapabilitySchema,
+  AnswersSchema,
+  DeviceSchema,
+  ModelPriceSchema,
+  parseEnvelope,
+} from "@agentpanel/protocol";
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -26,6 +32,7 @@ import type { Store } from "./store";
 type Env = { Variables: { principal: Principal }; Bindings: { remoteAddress?: string } };
 const emailSchema = z.string().email().max(320);
 const passkeyResponse = z.record(z.string(), z.unknown());
+const passwordSchema = z.string().min(8).max(256);
 const publicRoutes = new Set([
   "/api/auth/status",
   "/api/auth/register/options",
@@ -33,6 +40,9 @@ const publicRoutes = new Set([
   "/api/auth/login/options",
   "/api/auth/login/verify",
   "/api/auth/recovery/options",
+  "/api/auth/password/register",
+  "/api/auth/password/login",
+  "/api/auth/password/recover",
   "/api/auth/refresh",
   "/api/pairing/redeem",
 ]);
@@ -72,6 +82,12 @@ export function createRelay(store: Store, config: RelayConfig, webauthn?: WebAut
     if (publicRoutes.has(c.req.path)) {
       if (c.req.method !== "GET" && !limiter.take(`auth:${remote}`, 30, 60_000))
         throw new ApiError(429, "RATE_LIMITED", "认证请求过于频繁，请稍后重试");
+      // Passwords can be guessed online, so they get a much tighter budget than passkeys.
+      if (
+        c.req.path.startsWith("/api/auth/password/") &&
+        !limiter.take(`password:${remote}`, 10, 600_000)
+      )
+        throw new ApiError(429, "RATE_LIMITED", "密码尝试过于频繁，请 10 分钟后重试");
     } else {
       // Authenticate before body parsing and route validation, including nonexistent routes.
       const bearer = c.req.header("authorization")?.match(/^Bearer (.+)$/i)?.[1];
@@ -166,6 +182,49 @@ export function createRelay(store: Store, config: RelayConfig, webauthn?: WebAut
     );
     return c.json(await auth.recoveryOptions(input.email, input.recoveryCode));
   });
+  app.post("/api/auth/password/register", async (c) => {
+    const input = await body(
+      c,
+      z.object({
+        email: emailSchema,
+        bootstrapToken: z.string().min(1).max(1000),
+        password: passwordSchema,
+        native: z.boolean().optional(),
+      }),
+    );
+    return tokensResponse(
+      c,
+      await auth.passwordRegister(input.email, input.bootstrapToken, input.password),
+      input.native,
+    );
+  });
+  app.post("/api/auth/password/login", async (c) => {
+    const input = await body(
+      c,
+      z.object({
+        email: emailSchema,
+        password: z.string().min(1).max(256),
+        native: z.boolean().optional(),
+      }),
+    );
+    return tokensResponse(c, await auth.passwordLogin(input.email, input.password), input.native);
+  });
+  app.post("/api/auth/password/recover", async (c) => {
+    const input = await body(
+      c,
+      z.object({
+        email: emailSchema,
+        recoveryCode: z.string().min(1).max(256),
+        password: passwordSchema,
+        native: z.boolean().optional(),
+      }),
+    );
+    return tokensResponse(
+      c,
+      await auth.passwordRecover(input.email, input.recoveryCode, input.password),
+      input.native,
+    );
+  });
   app.post("/api/auth/refresh", async (c) => {
     const input = await body(
       c,
@@ -182,6 +241,14 @@ export function createRelay(store: Store, config: RelayConfig, webauthn?: WebAut
     const p = c.get("principal");
     const user = await store.get("users", p.owner, p.owner);
     return c.json({ user: { id: p.owner, email: user?.email } });
+  });
+  app.put("/api/auth/password", async (c) => {
+    const input = await body(
+      c,
+      z.object({ currentPassword: z.string().max(256).optional(), password: passwordSchema }),
+    );
+    await auth.setPassword(c.get("principal"), input.currentPassword, input.password);
+    return c.json({ ok: true });
   });
   app.post("/api/auth/logout", async (c) => {
     await auth.logout(c.get("principal"));
@@ -240,12 +307,25 @@ export function createRelay(store: Store, config: RelayConfig, webauthn?: WebAut
     return c.json(result);
   });
   app.patch("/api/devices/:id", async (c) => {
-    const input = await body(c, z.object({ name: z.string().min(1).max(128) }));
+    const input = await body(
+      c,
+      z
+        .object({
+          name: DeviceSchema.shape.name.optional(),
+          excludedProjects: DeviceSchema.shape.excludedProjects,
+        })
+        .refine((value) => value.name !== undefined || value.excludedProjects !== undefined),
+    );
     const owner = c.get("principal").owner;
     const device = await store.atomic(`tenant:${owner}`, async (tx) => {
       const row = await tx.get("devices", c.req.param("id"), owner);
       if (!row || row.revokedAt) throw missing();
-      const updated = { ...row, name: input.name };
+      const updated = { ...row };
+      if (input.name !== undefined) updated.name = input.name;
+      if (input.excludedProjects !== undefined)
+        updated.excludedProjects = [
+          ...new Set(input.excludedProjects.map((path) => path.trim()).filter(Boolean)),
+        ];
       await tx.put("devices", updated);
       return updated;
     });
@@ -298,7 +378,11 @@ export function createRelay(store: Store, config: RelayConfig, webauthn?: WebAut
   app.post("/api/approvals/:id/decision", async (c) => {
     const input = await body(
       c,
-      z.object({ decision: z.enum(["allow", "deny"]), reason: z.string().max(2000).optional() }),
+      z.object({
+        decision: z.enum(["allow", "deny"]),
+        reason: z.string().max(2000).optional(),
+        answers: AnswersSchema.optional(),
+      }),
     );
     return c.json({
       approval: await hub.decide(
@@ -306,6 +390,7 @@ export function createRelay(store: Store, config: RelayConfig, webauthn?: WebAut
         c.req.param("id"),
         input.decision,
         input.reason,
+        input.answers,
       ),
     });
   });

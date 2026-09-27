@@ -1,10 +1,13 @@
 import {
+  type Answers,
   COMMAND_TYPES,
   type Device,
   type Envelope,
+  isExcludedProject,
   isQuotaProbe,
   makeEnvelope,
   parseEnvelope,
+  type Question,
   type Session,
   SessionSchema,
 } from "@agentpanel/protocol";
@@ -144,6 +147,7 @@ export class Hub {
       agents: device.agents ?? [],
       lastSeen: device.lastSeen,
       online: this.devicePeers.has(device.id) && !device.revokedAt,
+      ...(device.excludedProjects?.length ? { excludedProjects: device.excludedProjects } : {}),
     };
   }
   async devices(owner: string): Promise<Device[]> {
@@ -307,6 +311,7 @@ export class Hub {
               ...device,
               ...event.payload,
               name: device.name,
+              excludedProjects: device.excludedProjects,
               online: true,
               lastSeen: Date.now(),
             }),
@@ -547,7 +552,13 @@ export class Hub {
       sessionId: command.envelope.sessionId,
     };
   }
-  async decide(owner: string, id: string, decision: "allow" | "deny", reason?: string) {
+  async decide(
+    owner: string,
+    id: string,
+    decision: "allow" | "deny",
+    reason?: string,
+    answers?: Answers,
+  ) {
     const result = await this.store.atomic(`tenant:${owner}`, async (tx) => {
       const approval = await tx.get("approvals", id, owner);
       if (!approval) throw missing();
@@ -560,11 +571,26 @@ export class Hub {
         await tx.put("approvals", expired);
         return { approval: expired, expired: true };
       }
+      const questions = approval.questions as Question[] | undefined;
+      if (answers && !questions)
+        throw new ApiError(400, "ANSWERS_NOT_EXPECTED", "该审批不是提问，不能提交答案");
+      if (questions && decision === "allow") {
+        const ids = new Set(questions.map((q) => q.id));
+        if (!answers || Object.keys(answers).some((key) => !ids.has(key)))
+          throw new ApiError(400, "INVALID_ANSWERS", "答案与问题不匹配");
+        if (questions.some((q) => !answers[q.id]?.some((value) => value.trim())))
+          throw new ApiError(400, "ANSWERS_INCOMPLETE", "请回答全部问题");
+      }
       const updated = { ...approval, status, decisionAt: Date.now(), reason };
       await tx.put("approvals", updated);
       const envelope = makeEnvelope(
         "approval.decide",
-        { approvalId: id, decision, reason },
+        {
+          approvalId: id,
+          decision,
+          reason,
+          ...(answers && decision === "allow" ? { answers } : {}),
+        },
         {
           id: `decision_${id}`,
           deviceId: approval.deviceId as string,
@@ -589,6 +615,8 @@ export class Hub {
           sessionId: approval.sessionId,
           decision,
           reason,
+          // The audit trail records that questions were answered, not the answer text.
+          ...(questions ? { answered: decision === "allow" } : {}),
         },
         owner,
       );
@@ -642,17 +670,28 @@ export class Hub {
       )
         canonical.set(key, session);
     }
+    const excluded = await this.excludedProjects(owner);
     return [...canonical.values()]
       .filter(
         (s) =>
           !s.excludedReason &&
           !isQuotaProbe(s) &&
+          !isExcludedProject(s.cwd, excluded.get(s.deviceId)) &&
           (!filter.deviceId || s.deviceId === filter.deviceId) &&
           (!filter.agent || s.agent === filter.agent) &&
           (!filter.project || s.cwd === filter.project),
       )
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .map(({ owner: _owner, seq: _seq, ...s }) => s);
+  }
+  /** Per-device project folders the owner hid from lists and stats. */
+  async excludedProjects(owner: string): Promise<Map<string, string[]>> {
+    return new Map(
+      (await this.store.list<DeviceRecord>("devices", owner)).map((d) => [
+        d.id,
+        d.excludedProjects ?? [],
+      ]),
+    );
   }
   async stats(
     owner: string,

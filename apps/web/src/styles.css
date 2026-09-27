@@ -2063,6 +2063,73 @@ textarea {
   font-size: 10px;
   padding: 10px 12px;
 }
+.question {
+  border: 0;
+  padding: 0;
+  margin: 0 0 16px;
+  min-width: 0;
+}
+.question legend {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  margin-bottom: 9px;
+  padding: 0;
+}
+.question legend em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--subtle);
+  margin-left: 6px;
+}
+.question-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--subtle);
+  background: var(--surface);
+  border-radius: 5px;
+  padding: 1px 6px;
+  margin-right: 7px;
+}
+.question-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 7px;
+}
+.question-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.question-option span {
+  color: var(--subtle);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.question-option.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.question-other {
+  width: 100%;
+  margin-top: 7px;
+  font-size: 11px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+}
 /* Usage */
 .date-preset {
   display: flex;
@@ -3992,4 +4059,21 @@ td > small {
   margin-top: 10px;
   text-align: left;
   font-size: 12px;
+}
+.auth-method {
+  margin-top: 4px;
+}
+.auth-method button {
+  flex: 1;
+}
+.password-form {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 6px;
+}
+.password-form .field {
+  margin: 0;
+}
+.password-form > button {
+  justify-self: start;
 }

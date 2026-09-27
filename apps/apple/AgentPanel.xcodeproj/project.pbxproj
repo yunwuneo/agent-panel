@@ -36,7 +36,7 @@
 		8EE43E666BA2F8BAC1F6F695 /* EnvelopeFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvelopeFactory.swift; sourceTree = "<group>"; };
 		9630FC8D0BCA21B970EF208B /* Sheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sheets.swift; sourceTree = "<group>"; };
 		B60367AE201C3772432A0C31 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
-		BC700F71F91521277C58EA20 /* AgentPanel.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AgentPanel.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BC700F71F91521277C58EA20 /* AgentPanel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentPanel.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E27B1AB74F8C09FFDE6E786B /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
 		E37047B206FD7E7B7DCE5F2F /* AgentPanelMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentPanelMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -198,6 +198,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = FQ6BA9L999;
 				INFOPLIST_KEY_CFBundleDisplayName = AgentPanel;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "连接你本地部署的 AgentPanel Relay。";
@@ -207,7 +208,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.agentpanel.client;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.neo7.agentpanel.client;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -226,7 +227,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.agentpanel.client.mac;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.neo7.agentpanel.client.mac;
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -236,6 +237,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = FQ6BA9L999;
 				INFOPLIST_KEY_CFBundleDisplayName = AgentPanel;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "连接你本地部署的 AgentPanel Relay。";
@@ -245,7 +247,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.agentpanel.client;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.neo7.agentpanel.client;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -393,7 +395,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.agentpanel.client.mac;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.neo7.agentpanel.client.mac;
 				SDKROOT = macosx;
 			};
 			name = Debug;

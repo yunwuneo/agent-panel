@@ -125,12 +125,16 @@ export class PushService {
       );
     const preference = Object.assign({}, defaultSetting, ...matched);
     if (!preference.enabled || !preference[kind]) return;
+    const question = event.type === "approval.request" && !!event.payload.questions?.length;
+    const title = question ? "需要你回答问题" : titles[kind];
     const body =
-      preference.preview && event.type === "approval.request"
-        ? `工具：${event.payload.toolName}`
-        : preference.preview && event.type === "session.event" && event.payload.error
-          ? event.payload.error.message.slice(0, 160)
-          : "打开 AgentPanel 查看详情";
+      preference.preview && question
+        ? event.payload.questions![0]!.question.slice(0, 160)
+        : preference.preview && event.type === "approval.request"
+          ? `工具：${event.payload.toolName}`
+          : preference.preview && event.type === "session.event" && event.payload.error
+            ? event.payload.error.message.slice(0, 160)
+            : "打开 AgentPanel 查看详情";
     const metadata = {
       type: kind,
       sessionId: event.sessionId,
@@ -147,7 +151,8 @@ export class PushService {
             await webpush.sendNotification(
               data,
               JSON.stringify({
-                title: titles[kind],
+                title,
+                question,
                 body,
                 ...metadata,
                 url: event.sessionId ? `/?session=${encodeURIComponent(event.sessionId)}` : "/",
@@ -167,9 +172,11 @@ export class PushService {
             if (!topic) return;
             await this.sendAPNs(subscription.token as string, topic, {
               aps: {
-                alert: { title: titles[kind], body },
+                alert: { title, body },
                 sound: "default",
-                category: kind === "approval" ? "AGENTPANEL_APPROVAL" : "AGENTPANEL_SESSION",
+                // Questions need the app to answer; allow/deny notification actions do not apply.
+                category:
+                  kind === "approval" && !question ? "AGENTPANEL_APPROVAL" : "AGENTPANEL_SESSION",
                 "thread-id": event.sessionId ?? "agentpanel",
               },
               ...metadata,

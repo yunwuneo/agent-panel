@@ -25,9 +25,13 @@ import UIKit
         MenuBarExtra("AgentPanel \(model.pendingApprovals.count)", systemImage: "square.stack.3d.up") {
             if model.pendingApprovals.isEmpty { Text("暂无待审批请求") }
             ForEach(model.pendingApprovals, id: \.id) { approval in
-                Menu(approval.toolName) {
-                    Button("允许") { Task { await model.decide(approval, allow: true) } }
-                    Button("拒绝") { Task { await model.decide(approval, allow: false) } }
+                if approval.questions?.isEmpty == false {
+                    Button("回答问题：\(approval.questions?.first?.question ?? "")") { model.selectedSession = approval.sessionId; NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
+                } else {
+                    Menu(approval.toolName) {
+                        Button("允许") { Task { await model.decide(approval, allow: true) } }
+                        Button("拒绝") { Task { await model.decide(approval, allow: false) } }
+                    }
                 }
             }
             Divider()

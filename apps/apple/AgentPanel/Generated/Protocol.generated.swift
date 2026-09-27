@@ -66,7 +66,8 @@ public struct APDevice: Codable, Sendable {
     public var online: Bool
     public var agents: [APAgentCapability]
     public var lastSeen: Int
-    public init(id: String, name: String, platform: String, hostname: String? = nil, online: Bool, agents: [APAgentCapability], lastSeen: Int) {
+    public var excludedProjects: [String]?
+    public init(id: String, name: String, platform: String, hostname: String? = nil, online: Bool, agents: [APAgentCapability], lastSeen: Int, excludedProjects: [String]? = nil) {
         self.id = id
         self.name = name
         self.platform = platform
@@ -74,6 +75,7 @@ public struct APDevice: Codable, Sendable {
         self.online = online
         self.agents = agents
         self.lastSeen = lastSeen
+        self.excludedProjects = excludedProjects
     }
 }
 
@@ -218,6 +220,32 @@ public struct APSessionEvent: Codable, Sendable {
     }
 }
 
+public struct APQuestionOption: Codable, Sendable {
+    public var label: String
+    public var description: String?
+    public init(label: String, description: String? = nil) {
+        self.label = label
+        self.description = description
+    }
+}
+
+public struct APQuestion: Codable, Sendable {
+    public var id: String
+    public var header: String?
+    public var question: String
+    public var options: [APQuestionOption]
+    public var multiSelect: Bool?
+    public var allowOther: Bool?
+    public init(id: String, header: String? = nil, question: String, options: [APQuestionOption], multiSelect: Bool? = nil, allowOther: Bool? = nil) {
+        self.id = id
+        self.header = header
+        self.question = question
+        self.options = options
+        self.multiSelect = multiSelect
+        self.allowOther = allowOther
+    }
+}
+
 public struct APApproval: Codable, Sendable {
     public var id: String
     public var deviceId: String
@@ -229,7 +257,8 @@ public struct APApproval: Codable, Sendable {
     public var expiresAt: Int
     public var status: String
     public var reason: String?
-    public init(id: String, deviceId: String, sessionId: String, toolCallId: String? = nil, toolName: String, input: JSONValue, createdAt: Int, expiresAt: Int, status: String, reason: String? = nil) {
+    public var questions: [APQuestion]?
+    public init(id: String, deviceId: String, sessionId: String, toolCallId: String? = nil, toolName: String, input: JSONValue, createdAt: Int, expiresAt: Int, status: String, reason: String? = nil, questions: [APQuestion]? = nil) {
         self.id = id
         self.deviceId = deviceId
         self.sessionId = sessionId
@@ -240,6 +269,7 @@ public struct APApproval: Codable, Sendable {
         self.expiresAt = expiresAt
         self.status = status
         self.reason = reason
+        self.questions = questions
     }
 }
 
