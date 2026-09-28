@@ -1,6 +1,5 @@
-import type { Approval, Device, Envelope, Session, SessionEvent } from "@agentpanel/protocol";
-import { makeEnvelope } from "@agentpanel/protocol";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { Approval, Device, Envelope, Session } from "@agentpanel/protocol";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowLeft,
@@ -26,6 +25,7 @@ import remarkGfm from "remark-gfm";
 import { errorText, post } from "./api";
 import { type ConnectionState, command, loadEvents } from "./connection";
 import { type ConversationItem, conversation, mergeEvents, projectName } from "./events";
+import { localHistoryOptions } from "./history";
 import { AgentMark, Empty, Notice, Spinner, Status } from "./ui";
 
 export default function Chat({
@@ -58,54 +58,22 @@ export default function Chat({
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const [history, setHistory] = useState<Envelope[]>([]);
-  const [historyBefore, setHistoryBefore] = useState<number>();
-  const [hasHistory, setHasHistory] = useState(session.source === "local");
+  const canReadHistory = !!device?.online && connection === "connected";
+  const history = useInfiniteQuery(localHistoryOptions(session, canReadHistory));
   const [atBottom, setAtBottom] = useState(true);
   const scroll = useRef<HTMLDivElement>(null);
   const textArea = useRef<HTMLTextAreaElement>(null);
-  const allEvents = useMemo(() => mergeEvents(history, events.data || []), [history, events.data]);
+  const allEvents = useMemo(
+    () => mergeEvents(history.data?.pages.flatMap((page) => page.events) ?? [], events.data ?? []),
+    [history.data, events.data],
+  );
   const messages = useMemo(() => conversation(allEvents), [allEvents]);
   const running = ["running", "waiting"].includes(session.status);
   const writable = !session.readOnly && device?.online && connection === "connected";
-  useEffect(() => {
-    setPrompt("");
-    setError("");
-    setHistory([]);
-    setHistoryBefore(undefined);
-    setHasHistory(session.source === "local");
-    setAtBottom(true);
-  }, [session.source]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Follow history and streaming updates while the reader stays at the bottom.
   useEffect(() => {
     if (atBottom && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [atBottom]);
-  async function loadHistory() {
-    setLoadingHistory(true);
-    setError("");
-    try {
-      const result = await command<{ events: SessionEvent[]; hasMore: boolean; before?: number }>(
-        "session.history",
-        { limit: 200, ...(historyBefore !== undefined ? { before: historyBefore } : {}) },
-        { deviceId: session.deviceId, sessionId: session.id },
-      );
-      const cutoff = session.createdAt;
-      const batch = result.events.map((event, index) =>
-        makeEnvelope("session.event", event, {
-          id: `history:${session.id}:${historyBefore ?? "first"}:${index}`,
-          sessionId: session.id,
-          ts: cutoff - result.events.length + index,
-        }),
-      );
-      setHistory((previous) => [...batch, ...previous]);
-      setHistoryBefore(result.before);
-      setHasHistory(result.hasMore);
-    } catch (error) {
-      setError(errorText(error));
-    } finally {
-      setLoadingHistory(false);
-    }
-  }
+  }, [atBottom, allEvents]);
   async function send(event: React.FormEvent) {
     event.preventDefault();
     if (!prompt.trim() || !writable || busy) return;
@@ -182,19 +150,37 @@ export default function Chat({
         }}
       >
         <div className="chat-messages">
-          {hasHistory && (
+          {history.isFetching && !history.isFetchingNextPage && <Spinner label="正在读取历史" />}
+          {history.isError && (
+            <Notice
+              onRetry={
+                canReadHistory
+                  ? () =>
+                      void (history.isFetchNextPageError
+                        ? history.fetchNextPage()
+                        : history.refetch())
+                  : undefined
+              }
+            >
+              历史读取失败：{errorText(history.error)}
+            </Notice>
+          )}
+          {history.hasNextPage && (
             <button
               type="button"
               className="history-button"
-              onClick={() => void loadHistory()}
-              disabled={loadingHistory || !device?.online}
+              onClick={() => {
+                setAtBottom(false);
+                void history.fetchNextPage();
+              }}
+              disabled={history.isFetching || !canReadHistory}
             >
-              {loadingHistory ? (
+              {history.isFetchingNextPage ? (
                 <Spinner label="正在读取历史" />
               ) : (
                 <>
                   <History size={15} />
-                  {history.length ? "加载更早的消息" : "从设备读取本地历史"}
+                  加载更早的消息
                 </>
               )}
             </button>
@@ -203,16 +189,21 @@ export default function Chat({
           {events.isError && (
             <Notice onRetry={() => void events.refetch()}>{errorText(events.error)}</Notice>
           )}
-          {messages.length === 0 && !events.isPending && (
-            <Empty
-              icon={Sparkles}
-              title={session.source === "local" ? "让上一次的灵感，继续发生" : "想法已就位"}
-            >
-              {session.source === "local"
-                ? "读取本地历史了解上下文，或直接发送消息继续这段会话。"
-                : "智能伙伴的消息、思考摘要和操作进展会显示在这里。"}
-            </Empty>
-          )}
+          {messages.length === 0 &&
+            !events.isPending &&
+            !history.isFetching &&
+            !history.isError && (
+              <Empty
+                icon={Sparkles}
+                title={session.source === "local" ? "暂无历史消息" : "想法已就位"}
+              >
+                {session.source === "local"
+                  ? canReadHistory
+                    ? "这段会话还没有可显示的历史消息。"
+                    : "等待设备连接，连接恢复后会自动读取历史。"
+                  : "智能伙伴的消息、思考摘要和操作进展会显示在这里。"}
+              </Empty>
+            )}
           {messages.map((message) => (
             <Message key={message.id} message={message} agent={session.agent} />
           ))}

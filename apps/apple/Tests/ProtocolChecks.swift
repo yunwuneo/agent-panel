@@ -41,6 +41,19 @@ import Foundation
         lateApproval.type = "approval.request"
         precondition(!timelineStateIsCurrent(lateApproval, lastSequence: 5), "An overlapping replay must not restore a completed approval")
         print("Swift: out-of-order replay, duplicate delivery and cross-turn delta boundaries passed")
+        let local = APSession(id: "local", deviceId: "device", agent: "codex", cwd: "/workspace", title: "History", status: "idle", source: "local", createdAt: 100, updatedAt: 100, readOnly: true)
+        func history(_ start: Int, _ more: Bool) throws -> JSONValue {
+            .object(["before": .number(Double(start)), "hasMore": .bool(more), "events": try .encoded([APSessionEvent(kind: "message.done", text: "history-\(start)")])])
+        }
+        let recent = try localHistoryPage(history(200, true), session: local)
+        let older = try localHistoryPage(history(0, false), session: local, before: recent.next)
+        precondition(recent.next == 200 && older.next == nil)
+        let refreshed = try localHistoryPage(history(200, true), session: local)
+        let combined = mergedTimeline(recent.events + [first], older.events + refreshed.events)
+        precondition(combined.map(\.id) == ["history:local:0", "history:local:200", first.id], "History refresh must not duplicate pages or reorder live messages")
+        let stalled = try localHistoryPage(history(200, true), session: local, before: 200)
+        precondition(stalled.next == nil, "A repeated cursor must not keep loading forever")
+        print("Swift: local history pagination, refresh deduplication and live-event ordering passed")
         let outgoing = EnvelopeFactory.make("session.send", payload: .object(["prompt": .string("Swift → TS 🌊")]), device: "device_contract", session: "session_contract")
         let roots = EnvelopeFactory.make("fs.listDir", payload: .object(["path": .string("")]), device: "device_contract")
         try JSONEncoder().encode([outgoing, roots]).write(to: URL(fileURLWithPath: CommandLine.arguments[2]))

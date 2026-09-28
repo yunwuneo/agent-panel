@@ -73,7 +73,6 @@ struct RootView: View {
                 #endif
             } else { WelcomeView(model: model) }
         }
-        .onChange(of: model.selectedSession) { _, id in if let id { Task { await model.loadHistory(id) } } }
         .tint(Color(red: 0.16, green: 0.45, blue: 0.75))
         .sheet(isPresented: $showNew) { NewSessionView(model: model) }
         .sheet(isPresented: $showDevices) { DeviceQuotaView(model: model) }
@@ -374,11 +373,26 @@ struct SessionDetail: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 18) {
+                            if model.localHistoryLoading.contains(session.id) { ProgressView("正在读取历史…") }
+                            if let failure = model.localHistoryErrors[session.id] {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("历史读取失败：\(failure)").foregroundStyle(.orange)
+                                    Button("重试") { Task { await model.retryLocalHistory(session) } }
+                                        .disabled(!model.isConnected || !deviceOnline(session))
+                                }
+                            }
+                            if model.localHistoryBefore[session.id] != nil {
+                                Button("加载更早的消息") { Task { await model.loadLocalHistory(session, earlier: true) } }
+                                    .disabled(model.localHistoryLoading.contains(session.id) || !model.isConnected || !deviceOnline(session))
+                            }
+                            if session.source == "local", !deviceOnline(session) || !model.isConnected {
+                                Text("等待设备连接，连接恢复后会自动读取历史。").font(.caption).foregroundStyle(.secondary)
+                            }
                             ForEach(coalesced(model.events[session.id] ?? []), id: \.id) { message in EventView(envelope: message).id(message.id) }
                             ForEach(model.pendingApprovals.filter { $0.sessionId == session.id }, id: \.id) { approval in ApprovalCard(approval: approval, model: model) }
                             Color.clear.frame(height: 1).id("end")
                         }.padding(compact ? 16 : 24).frame(maxWidth: 900).frame(maxWidth: .infinity)
-                    }.onChange(of: model.events[session.id]?.count) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+                    }.onChange(of: model.events[session.id]?.last?.id, initial: true) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
                 }
                 HStack(alignment: .bottom, spacing: 12) {
                     TextField("继续这个想法…", text: $prompt, axis: .vertical).lineLimit(1...7).textFieldStyle(.plain).padding(10).onSubmit { submit(session) }
@@ -390,12 +404,15 @@ struct SessionDetail: View {
                 }.padding(10).panelGlass().padding(compact ? 12 : 18)
             }
             .navigationTitle(session.title)
+            .onChange(of: "\(session.id):\(model.isConnected):\(deviceOnline(session))", initial: true) { _, _ in
+                Task { await model.loadHistory(session.id) }
+            }
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(compact ? .hidden : .automatic, for: .tabBar)
             #endif
             .toolbar {
-                if session.nativeId != nil { Button { showLocalHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }.help("读取设备本地历史") }
+                if session.nativeId != nil { Button { showLocalHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }.help("查看完整设备记录").accessibilityLabel("查看完整设备记录") }
                 #if os(macOS)
                 Text(session.agent.capitalized).font(.caption).foregroundStyle(.secondary)
                 #endif
@@ -405,6 +422,7 @@ struct SessionDetail: View {
             ContentUnavailableView { Label("在这里，继续创造", systemImage: "sparkles") } description: { Text("选择一个会话，或者开启新的想法。\nClaude 与 Codex，跨设备始终连贯。") }
         }
     }
+    private func deviceOnline(_ session: APSession) -> Bool { model.devices.contains { $0.id == session.deviceId && $0.online } }
     private func submit(_ session: APSession) {
         guard !session.readOnly, model.isConnected, !["running", "waiting"].contains(session.status), !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let text = prompt; prompt = ""

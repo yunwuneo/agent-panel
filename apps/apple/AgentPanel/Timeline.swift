@@ -1,5 +1,16 @@
 import Foundation
 
+/// Stable offsets let older pages, refreshed transcripts and live events share one timeline.
+func localHistoryPage(_ history: JSONValue, session: APSession, before: Int? = nil) throws -> (events: [APEnvelope], next: Int?) {
+    let items = try history["events"].decoded([APSessionEvent].self)
+    let start = Int(history["before"].numberValue ?? 0)
+    let events = try items.enumerated().map { index, item in
+        APEnvelope(v: 1, id: "history:\(session.id):\(start + index)", deviceId: session.deviceId, sessionId: session.id, ts: session.createdAt + start + index, type: "session.event", payload: try .encoded(item))
+    }
+    let next = history["hasMore"].boolValue == true && start > 0 && (before == nil || start < before!) ? start : nil
+    return (events, next)
+}
+
 func timelineStateIsCurrent(_ event: APEnvelope, lastSequence: Int) -> Bool {
     event.seq.map { $0 >= lastSequence } ?? true
 }

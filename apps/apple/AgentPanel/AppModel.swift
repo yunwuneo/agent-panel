@@ -45,6 +45,9 @@ func isExcludedProject(_ cwd: String, _ excluded: [String]?) -> Bool {
     var selectedDevice: String?
     var selectedSession: String?
     var events: [String: [APEnvelope]] = [:]
+    var localHistoryLoading: Set<String> = []
+    var localHistoryErrors: [String: String] = [:]
+    var localHistoryBefore: [String: Int] = [:]
     var stats: JSONValue = .null
     var pairingCode = ""
     var pairingExpiresAt: Double?
@@ -54,6 +57,9 @@ func isExcludedProject(_ cwd: String, _ excluded: [String]?) -> Bool {
     }
     @ObservationIgnored private var replayedSessions: Set<String> = []
     @ObservationIgnored private var loadingHistory: Set<String> = []
+    @ObservationIgnored private var localHistoryLoadedAt: [String: Date] = [:]
+    @ObservationIgnored private var localHistoryRetryEarlier: Set<String> = []
+    @ObservationIgnored private var historyContext = UUID()
     @ObservationIgnored let api = RelayClient()
     @ObservationIgnored let passkeys = PasskeyController()
     @ObservationIgnored private var connectionTask: Task<Void, Never>?
@@ -167,6 +173,8 @@ func isExcludedProject(_ cwd: String, _ excluded: [String]?) -> Bool {
         api.accessToken = nil; isAuthenticated = false; isConnected = false
         sessions = []; devices = []; events = [:]; approvals = []; selectedSession = nil; selectedDevice = nil
         lastSequence = [:]; replayedSessions = []
+        historyContext = UUID(); loadingHistory = []; localHistoryLoading = []
+        localHistoryErrors = [:]; localHistoryBefore = [:]; localHistoryLoadedAt = [:]; localHistoryRetryEarlier = []
     }
     /// 切换到另一个 Relay。刷新令牌按地址分别保存在钥匙串：新地址已有登录时直接恢复，否则回到登录页。
     /// 旧地址的登录保留，切回时无需重新登录。
@@ -295,12 +303,15 @@ func isExcludedProject(_ cwd: String, _ excluded: [String]?) -> Bool {
     }
     func loadHistory(_ id: String, after: Int? = nil) async {
         guard loadingHistory.insert(id).inserted else { return }
-        defer { loadingHistory.remove(id) }
+        let context = historyContext
+        defer { if context == historyContext { loadingHistory.remove(id) } }
         do {
             var cursor = after ?? (replayedSessions.contains(id) ? lastSequence[id] ?? 0 : 0)
             try await subscribe()
             while true {
                 let result = try await api.request("/api/sessions/\(id)/events?after=\(cursor)&limit=500")
+                guard context == historyContext else { return }
+                try Task.checkCancellation()
                 let items = try result["events"].decoded([APEnvelope].self)
                 for item in items { consume(item) }
                 let next = Int(result["nextSeq"].numberValue ?? Double(cursor))
@@ -308,12 +319,45 @@ func isExcludedProject(_ cwd: String, _ excluded: [String]?) -> Bool {
                 cursor = next
             }
             replayedSessions.insert(id)
-            if events[id]?.isEmpty != false, let session = sessions.first(where: { $0.id == id }), session.source == "local" {
-                let transcript = try await readLocalHistory(session)
-                let existing = events[id] ?? []
-                events[id] = mergedTimeline(existing, transcript)
+        } catch where !isCancellation(error) {
+            if context == historyContext { self.error = error.localizedDescription }
+        } catch {}
+        guard context == historyContext, !Task.isCancelled, let session = sessions.first(where: { $0.id == id }) else { return }
+        await loadLocalHistory(session)
+    }
+    /// Read the latest device transcript automatically, even when Relay already has some events.
+    func loadLocalHistory(_ session: APSession, earlier: Bool = false, force: Bool = false) async {
+        let id = session.id
+        guard session.source == "local", isConnected, devices.contains(where: { $0.id == session.deviceId && $0.online }) else { return }
+        if !earlier, !force, let loaded = localHistoryLoadedAt[id], Date().timeIntervalSince(loaded) < 30 { return }
+        let before = earlier ? localHistoryBefore[id] : nil
+        if earlier && before == nil { return }
+        guard localHistoryLoading.insert(id).inserted else { return }
+        let context = historyContext
+        localHistoryErrors[id] = nil
+        defer { if context == historyContext { localHistoryLoading.remove(id) } }
+        do {
+            var query: [String: JSONValue] = ["limit": .number(200)]
+            if let before { query["before"] = .number(Double(before)) }
+            let history = try await command("session.history", device: session.deviceId, session: id, payload: query, awaitResult: true)
+            guard context == historyContext else { return }
+            try Task.checkCancellation()
+            let page = try localHistoryPage(history, session: session, before: before)
+            events[id] = mergedTimeline(events[id] ?? [], page.events)
+            if earlier || localHistoryLoadedAt[id] == nil {
+                localHistoryBefore[id] = page.next
             }
-        } catch where !isCancellation(error) { self.error = error.localizedDescription } catch {}
+            localHistoryLoadedAt[id] = Date()
+            localHistoryRetryEarlier.remove(id)
+        } catch where !isCancellation(error) {
+            if context == historyContext {
+                localHistoryErrors[id] = error.localizedDescription
+                if earlier { localHistoryRetryEarlier.insert(id) } else { localHistoryRetryEarlier.remove(id) }
+            }
+        } catch {}
+    }
+    func retryLocalHistory(_ session: APSession) async {
+        await loadLocalHistory(session, earlier: localHistoryRetryEarlier.contains(session.id), force: true)
     }
     func readLocalHistory(_ session: APSession) async throws -> [APEnvelope] {
         var before: Int?
@@ -322,12 +366,10 @@ func isExcludedProject(_ cwd: String, _ excluded: [String]?) -> Bool {
             var query: [String: JSONValue] = ["limit": .number(500)]
             if let before { query["before"] = .number(Double(before)) }
             let history = try await command("session.history", device: session.deviceId, session: session.id, payload: query, awaitResult: true)
-            let items = try history["events"].decoded([APSessionEvent].self)
-            let start = Int(history["before"].numberValue ?? 0)
-            let page = try items.enumerated().map { index, item in APEnvelope(v: 1, id: "history:\(session.id):\(start + index)", deviceId: session.deviceId, sessionId: session.id, ts: session.createdAt + start + index, type: "session.event", payload: try .encoded(item)) }
-            transcript.insert(contentsOf: page, at: 0)
-            guard history["hasMore"].boolValue == true, start > 0, before == nil || start < before! else { break }
-            before = start
+            let page = try localHistoryPage(history, session: session, before: before)
+            transcript.insert(contentsOf: page.events, at: 0)
+            guard let next = page.next else { break }
+            before = next
         }
         return transcript
     }
