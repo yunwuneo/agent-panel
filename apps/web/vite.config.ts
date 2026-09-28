@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    allowedHosts: ["agentpanel.neo7.cn"],
     proxy: {
       "/api": { target: process.env.RELAY_URL || "http://localhost:8787", changeOrigin: false },
       "/ws": {
